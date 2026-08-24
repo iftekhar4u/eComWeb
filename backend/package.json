@@ -1,0 +1,46 @@
+{
+  "name": "aurelia-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test": "vitest run",
+    "test:database": "vitest run tests/database.test.js",
+    "create-admin": "node scripts/create-admin.js",
+    "setup-mongo-access": "node scripts/setup-mongo-access.js",
+    "db:diagnose": "node scripts/diagnose-database.js",
+    "db:diagnose:test": "node scripts/diagnose-database.js --test",
+    "db:migrate": "node scripts/migrate-database.js",
+    "db:migrate:test": "node scripts/migrate-database.js --test",
+    "db:verify": "node scripts/verify-database.js",
+    "db:verify:test": "node scripts/verify-database.js --test",
+    "db:seed": "node scripts/seed-development.js --confirm-seed"
+  },
+  "dependencies": {
+    "argon2": "^0.45.1",
+    "bcryptjs": "^3.0.2",
+    "connect-mongo": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.7.0",
+    "express-session": "^1.19.0",
+    "express-validator": "^7.2.1",
+    "google-auth-library": "^11.0.2",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.18.0",
+    "multer": "^2.0.2",
+    "otplib": "^13.5.0",
+    "passport": "^0.7.0",
+    "passport-google-oidc": "^0.1.0",
+    "passport-local": "^1.0.0",
+    "supertest": "^7.2.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.1"
+  }
+}
