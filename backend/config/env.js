@@ -5,6 +5,15 @@ const optionalText = (schema) => z.preprocess(value => value === '' ? undefined 
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  EMAIL_ENABLED: z.preprocess(value => value === true || value === 'true', z.boolean()).default(false),
+  EMAIL_ENCRYPTION_KEY: optionalText(z.string().min(32)),
+  SMTP_HOST: optionalText(z.string().max(253)),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_SECURE: z.preprocess(value => value === true || value === 'true', z.boolean()).default(false),
+  SMTP_USER: optionalText(z.string().max(320)),
+  SMTP_PASS: optionalText(z.string().max(2048)),
+  MAIL_FROM: optionalText(z.string().email().max(254)),
+  MAIL_SUPPORT: optionalText(z.string().email().max(254)),
   PORT: z.coerce.number().int().min(1).max(65535).default(5000),
   MONGO_URI: optionalText(z.string().min(1)),
   MONGO_DEV_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/aurelia_dev'),
