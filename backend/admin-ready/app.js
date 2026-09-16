@@ -1,0 +1,81 @@
+import securityRoutes from './security.js'
+import readyRoutes from './routes.js'
+import express from 'express'
+import cors from 'cors'
+import cookieParser from 'cookie-parser'
+import session from 'express-session'
+import MongoStore from 'connect-mongo'
+import passport from 'passport'
+import helmet from 'helmet'
+import { rateLimit } from 'express-rate-limit'
+import mongoose from 'mongoose'
+import { getConfig, getMongoUri } from '../config/env.js'
+import productRoutes from '../routes/productRoutes.js'
+import authRoutes from '../routes/authRoutes.js'
+import wishlistRoutes from '../routes/wishlistRoutes.js'
+import adminRoutes from '../routes/adminRoutes.js'
+import adminStudioRoutes from '../routes/adminStudioRoutes.js'
+import contentRoutes from '../routes/contentRoutes.js'
+import orderRoutes from '../routes/orderRoutes.js'
+import { razorpayWebhook } from '../routes/webhookRoutes.js'
+import { createRazorpay } from '../services/razorpay.js'
+import cartRoutes from '../routes/cartRoutes.js'
+import { requireCsrf } from '../middleware/csrfMiddleware.js'
+import { errorHandler, notFound } from '../middleware/errorMiddleware.js'
+import { configurePassport } from '../config/passport.js'
+
+export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory } = {}) {
+  const app = express()
+  app.locals.config = config
+  app.locals.gateway = gateway || createRazorpay(config)
+  app.locals.googleAuthEnabled = config.GOOGLE_AUTH_ENABLED
+  app.locals.clientUrl = config.CLIENT_URL
+  app.disable('x-powered-by')
+  app.set('trust proxy', config.TRUST_PROXY)
+  app.use(helmet({ contentSecurityPolicy: config.NODE_ENV === 'production' ? { directives: { imgSrc: ["'self'",'data:','https:'] } } : false }))
+  app.use(cors({ origin: config.CLIENT_URL, credentials: true }))
+  app.post('/api/payments/razorpay/webhook', express.raw({ type: 'application/json', limit: '100kb' }), razorpayWebhook)
+  app.use(express.json({ limit: '100kb' }))
+  app.use(cookieParser())
+  app.use(session({
+    name: 'aurelia.sid',
+    secret: config.SESSION_SECRET || 'test-session-secret-test-session-secret',
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    store: store || (config.MONGO_URI ? MongoStore.create({ mongoUrl: config.MONGO_URI, ttl: 60 * 60 * 24 * 7, autoRemove: 'interval', autoRemoveInterval: 10 }) : undefined),
+    cookie: { httpOnly: true, secure: config.NODE_ENV === 'production', sameSite: 'lax', maxAge: 30 * 60 * 1000 },
+  }))
+  configurePassport(passport, config)
+  app.use(passport.initialize())
+  app.use(passport.session())
+  app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 200, standardHeaders: 'draft-8', legacyHeaders: false }))
+  app.get('/api/health', (_req, res) => res.json({ status: 'ok', brand: 'AURELIA' }))
+  app.use('/api/admin-ready/security', requireCsrf, securityRoutes)
+  app.use('/api/admin-ready', requireCsrf, readyRoutes)
+  app.use('/api/admin/studio', requireCsrf, adminStudioRoutes)
+  app.use('/api/admin', requireCsrf, adminRoutes)
+  app.use('/api/orders', requireCsrf, orderRoutes)
+  app.use('/api/content', requireCsrf, contentRoutes)
+  app.use('/api/v1/auth', requireCsrf, authRoutes)
+  app.use('/api/v1', requireCsrf, authRoutes)
+  app.use('/api/v1/products', productRoutes)
+  app.use('/api/v1/wishlist', requireCsrf, wishlistRoutes)
+  app.use('/api/v1/cart', requireCsrf, cartRoutes)
+  app.use('/api/auth', requireCsrf, authRoutes)
+  app.use('/api/products', productRoutes)
+  app.use('/api/wishlist', requireCsrf, wishlistRoutes)
+  app.use('/api/cart', requireCsrf, cartRoutes)
+  if(staticDirectory) {
+    app.use(express.static(staticDirectory))
+    app.get('/{*path}',(req,res,next)=>req.path==='/api'||req.path.startsWith('/api/')?next():res.sendFile(`${staticDirectory}/index.html`))
+  }
+  app.use(notFound)
+  app.use(errorHandler)
+  return app
+}
+
+export async function connectDatabase(config = getConfig()) {
+  if (config.NODE_ENV === 'test' && !config.MONGO_URI) return
+  await mongoose.connect(config.MONGO_URI || getMongoUri(config), { serverSelectionTimeoutMS: 5000, autoIndex: false, autoCreate: false })
+}
