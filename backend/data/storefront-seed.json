@@ -1,0 +1,357 @@
+{
+  "products": [
+    {
+      "id": 1,
+      "slug": "vitamin-c-radiance-serum",
+      "name": "Vitamin C Radiance Serum",
+      "category": "skin-care",
+      "gender": "women",
+      "price": 899,
+      "oldPrice": 1199,
+      "description": "A brightening botanical serum for a fresh, even-looking glow.",
+      "highlights": [
+        "Vitamin C for radiance",
+        "Lightweight daily texture",
+        "Suitable for everyday rituals"
+      ],
+      "rating": 4.9,
+      "numReviews": 126,
+      "thumbnail": "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=800&q=85",
+        "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "Bestseller",
+      "stock": true
+    },
+    {
+      "id": 2,
+      "slug": "hydrating-face-wash",
+      "name": "Hydrating Face Wash",
+      "category": "skin-care",
+      "gender": "women",
+      "price": 499,
+      "oldPrice": 650,
+      "description": "A gentle cleanser that leaves skin feeling clean, soft and comfortable.",
+      "highlights": [
+        "Non-stripping cleanse",
+        "Botanical extracts",
+        "For morning and evening"
+      ],
+      "rating": 4.8,
+      "numReviews": 94,
+      "thumbnail": "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "Bestseller",
+      "stock": true
+    },
+    {
+      "id": 3,
+      "slug": "daily-glow-moisturizer",
+      "name": "Daily Glow Moisturizer",
+      "category": "skin-care",
+      "gender": "women",
+      "price": 649,
+      "oldPrice": 799,
+      "description": "A light, nourishing moisturizer for naturally radiant-looking skin.",
+      "highlights": [
+        "Comfortable daily hydration",
+        "Soft glow finish",
+        "Layers well under makeup"
+      ],
+      "rating": 4.8,
+      "numReviews": 81,
+      "thumbnail": "https://images.unsplash.com/photo-1611930021554-8f7f9f9a2f0f?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1611930021554-8f7f9f9a2f0f?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "Bestseller",
+      "stock": true
+    },
+    {
+      "id": 4,
+      "slug": "matte-finish-sunscreen",
+      "name": "Matte Finish Sunscreen",
+      "category": "skin-care",
+      "gender": "women",
+      "price": 749,
+      "oldPrice": 999,
+      "description": "Comfortable daily SPF with a smooth, shine-conscious finish.",
+      "highlights": [
+        "SPF 50 protection",
+        "Lightweight finish",
+        "Made for daily wear"
+      ],
+      "rating": 4.7,
+      "numReviews": 72,
+      "thumbnail": "https://images.unsplash.com/photo-1556228720-195a672e8a03?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1556228720-195a672e8a03?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "Bestseller",
+      "stock": true
+    },
+    {
+      "id": 5,
+      "slug": "herbal-hair-serum",
+      "name": "Herbal Hair Serum",
+      "category": "hair-care",
+      "gender": "women",
+      "price": 579,
+      "oldPrice": 699,
+      "description": "A silky botanical serum for smoother, more manageable hair.",
+      "highlights": [
+        "Lightweight botanical oils",
+        "Smooths dry ends",
+        "No heavy residue"
+      ],
+      "rating": 4.8,
+      "numReviews": 73,
+      "thumbnail": "https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "Ritual pick",
+      "stock": true
+    },
+    {
+      "id": 6,
+      "slug": "rose-body-lotion",
+      "name": "Rose Body Lotion",
+      "category": "body-care",
+      "gender": "women",
+      "price": 549,
+      "oldPrice": 699,
+      "description": "A softening body lotion with a delicate rose finish.",
+      "highlights": [
+        "Everyday moisture",
+        "Silky, quick-absorbing feel",
+        "Subtle rose scent"
+      ],
+      "rating": 4.7,
+      "numReviews": 61,
+      "thumbnail": "https://images.unsplash.com/photo-1608248543803-ba4f8c70ae0b?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1608248543803-ba4f8c70ae0b?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "New arrival",
+      "stock": true
+    },
+    {
+      "id": 7,
+      "slug": "nourishing-lip-balm",
+      "name": "Nourishing Lip Balm",
+      "category": "makeup",
+      "gender": "women",
+      "price": 299,
+      "oldPrice": 399,
+      "description": "A sheer, nourishing balm that brings comfort and a hint of colour.",
+      "highlights": [
+        "Soft tint",
+        "Nourishing oils",
+        "Easy everyday finish"
+      ],
+      "rating": 4.8,
+      "numReviews": 48,
+      "thumbnail": "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "New arrival",
+      "stock": true
+    },
+    {
+      "id": 8,
+      "slug": "radiance-facial-kit",
+      "name": "Radiance Facial Kit",
+      "category": "women",
+      "gender": "women",
+      "price": 1199,
+      "oldPrice": 1599,
+      "description": "A complete glow ritual bringing together gentle, luminous essentials.",
+      "highlights": [
+        "A complete beauty ritual",
+        "Thoughtful botanical formulas",
+        "Ideal for gifting"
+      ],
+      "rating": 4.9,
+      "numReviews": 38,
+      "thumbnail": "https://images.unsplash.com/photo-1611930022073-b7a4ba5fcccd?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1611930022073-b7a4ba5fcccd?auto=format&fit=crop&w=800&q=85",
+        "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "New arrival",
+      "stock": true
+    },
+    {
+      "id": 9,
+      "slug": "cedar-grove-face-cleanser",
+      "name": "Cedar Grove Face Cleanser",
+      "category": "men",
+      "gender": "men",
+      "price": 599,
+      "oldPrice": 749,
+      "description": "A fresh, uncomplicated cleanser for a clear-feeling daily routine.",
+      "highlights": [
+        "Fresh daily cleanse",
+        "Gentle botanical blend",
+        "For morning and evening"
+      ],
+      "rating": 4.7,
+      "numReviews": 29,
+      "thumbnail": "https://images.unsplash.com/photo-1585232351009-aa87416fca90?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1585232351009-aa87416fca90?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "New arrival",
+      "stock": true
+    },
+    {
+      "id": 10,
+      "slug": "little-cloud-baby-lotion",
+      "name": "Little Cloud Baby Lotion",
+      "category": "baby-care",
+      "gender": "unisex",
+      "price": 449,
+      "oldPrice": 549,
+      "description": "A gentle lotion for soft, comforted skin and quiet daily moments.",
+      "highlights": [
+        "Gentle everyday care",
+        "Soft, comforting texture",
+        "Made for delicate skin"
+      ],
+      "rating": 4.9,
+      "numReviews": 22,
+      "thumbnail": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=800&q=85",
+      "images": [
+        "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=800&q=85"
+      ],
+      "tag": "New arrival",
+      "stock": true
+    }
+  ],
+  "categoryDetails": {
+    "skin-care": {
+      "label": "Skin Care",
+      "description": "Thoughtful essentials for a calm, healthy-looking complexion.",
+      "image": "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=500&q=85"
+    },
+    "makeup": {
+      "label": "Makeup",
+      "description": "Easy, expressive colour for the rituals you already have.",
+      "image": "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=500&q=85"
+    },
+    "hair-care": {
+      "label": "Hair Care",
+      "description": "Botanical nourishment for softer, stronger-looking hair.",
+      "image": "https://images.unsplash.com/photo-1527799820374-dcf8b5d7de8a?auto=format&fit=crop&w=500&q=85"
+    },
+    "body-care": {
+      "label": "Body Care",
+      "description": "Daily care that leaves your skin comfortable and cared for.",
+      "image": "https://images.unsplash.com/photo-1608248543803-ba4f8c70ae0b?auto=format&fit=crop&w=500&q=85"
+    },
+    "men": {
+      "label": "Men",
+      "description": "Straightforward grooming essentials, made for everyday use.",
+      "image": "https://images.unsplash.com/photo-1585232351009-aa87416fca90?auto=format&fit=crop&w=500&q=85"
+    },
+    "women": {
+      "label": "Women",
+      "description": "A considered edit of beauty essentials for every kind of ritual.",
+      "image": "https://images.unsplash.com/photo-1611930022073-b7a4ba5fcccd?auto=format&fit=crop&w=500&q=85"
+    },
+    "baby-care": {
+      "label": "Baby Care",
+      "description": "Gentle, comforting care for the smallest daily moments.",
+      "image": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=500&q=85"
+    }
+  },
+  "categoryOrder": [
+    "skin-care",
+    "makeup",
+    "hair-care",
+    "body-care",
+    "men",
+    "women",
+    "baby-care"
+  ],
+  "blogs": [
+    {
+      "slug": "simple-morning-skincare-routine",
+      "title": "5 Steps for a Simple Morning Skincare Routine",
+      "excerpt": "Start the day with a calm, considered ritual.",
+      "image": "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=800&q=85",
+      "body": "A thoughtful morning routine does not need to be complicated. Begin with a gentle cleanse, follow with a hydrating serum, and finish with moisturizer and daily SPF. Give each layer a moment to settle so your skin feels comfortable and ready for the day."
+    },
+    {
+      "slug": "how-to-choose-the-right-sunscreen",
+      "title": "How to Choose the Right Sunscreen",
+      "excerpt": "Everything you need to know about daily SPF.",
+      "image": "https://images.unsplash.com/photo-1556228720-195a672e8a03?auto=format&fit=crop&w=800&q=85",
+      "body": "The best sunscreen is one you will use every day. Look for broad-spectrum protection, choose a texture that suits your skin, and apply enough to cover your face, neck, and ears. Reapply when you spend extended time outdoors."
+    },
+    {
+      "slug": "build-a-night-skincare-routine",
+      "title": "How to Build a Night Skincare Routine",
+      "excerpt": "Small evening steps for beautifully rested skin.",
+      "image": "https://images.unsplash.com/photo-1611930022073-b7a4ba5fcccd?auto=format&fit=crop&w=800&q=85",
+      "body": "An evening ritual is a chance to slow down. Remove the day gently, cleanse thoroughly, then apply treatments that suit your needs before sealing in moisture. Consistency matters more than a long list of products."
+    }
+  ],
+  "testimonials": [
+    {
+      "name": "Ananya S.",
+      "text": "The serum has made my morning routine feel so easy. My skin looks fresh and bright.",
+      "rating": 5
+    },
+    {
+      "name": "Meera R.",
+      "text": "Beautiful textures, quick delivery and such a lovely thoughtful brand.",
+      "rating": 5
+    },
+    {
+      "name": "Riya K.",
+      "text": "The moisturizer is light but nourishing. It is now a permanent part of my shelf.",
+      "rating": 5
+    },
+    {
+      "name": "Nisha P.",
+      "text": "My skin feels softer and more balanced after only a few weeks.",
+      "rating": 5
+    },
+    {
+      "name": "Tara M.",
+      "text": "The packaging is beautiful, and every product feels thoughtfully made.",
+      "rating": 5
+    },
+    {
+      "name": "Kavya S.",
+      "text": "This cleanser is gentle on my sensitive skin and leaves it feeling fresh.",
+      "rating": 5
+    },
+    {
+      "name": "Aditi V.",
+      "text": "Fast delivery, lovely packaging, and products that actually work.",
+      "rating": 5
+    },
+    {
+      "name": "Ishita G.",
+      "text": "The sunscreen feels lightweight and does not leave a white cast.",
+      "rating": 5
+    },
+    {
+      "name": "Pooja N.",
+      "text": "A simple skincare routine that has made a noticeable difference.",
+      "rating": 5
+    },
+    {
+      "name": "Sana A.",
+      "text": "The body lotion absorbs quickly and keeps my skin moisturized all day.",
+      "rating": 5
+    }
+  ]
+}
