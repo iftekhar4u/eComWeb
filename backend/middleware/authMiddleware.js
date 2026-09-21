@@ -1,5 +1,10 @@
 import User from '../models/User.js'
 
+// Local development uses password-only admin login. Other environments retain MFA.
+export function adminMfaRequired(req) {
+	return req.app?.locals?.config?.NODE_ENV !== 'development'
+}
+
 export async function protect(req, res, next) {
 	if (!req.session?.userId) return res.status(401).json({ message: 'Authentication required' })
 	const user = await User.findById(req.session.userId)
@@ -7,18 +12,18 @@ export async function protect(req, res, next) {
 		req.session.destroy(() => {})
 		return res.status(401).json({ message: 'Authentication required' })
 	}
-	if (user.role === 'admin' && !req.session.mfaVerified) return res.status(403).json({ message: 'Administrator MFA required' })
+	if (user.role === 'admin' && adminMfaRequired(req) && !req.session.mfaVerified) return res.status(403).json({ message: 'Administrator MFA required' })
 	req.user = user
 	next()
 }
 
 export function requireAdmin(req, res, next) {
-	if (req.user?.role !== 'admin' || !req.session.mfaVerified) return res.status(403).json({ message: 'Administrator access required' })
+	if (req.user?.role !== 'admin' || (adminMfaRequired(req) && !req.session.mfaVerified)) return res.status(403).json({ message: 'Administrator access required' })
 	next()
 }
 
 export function safeUser(user) {
-	return { id: user._id, name: user.name, email: user.email, role: user.role, status: user.status, mfaEnabled: Boolean(user.mfa?.enabled) }
+	return { id: user._id, name: user.name, email: user.email, role: user.role, status: user.status, mfaEnabled: Boolean(user.mfa?.enabled), phone: user.phone || '', googleLinked: Boolean(user.google?.subject) }
 }
 
 export async function protectPendingAdmin(req, res, next) {
