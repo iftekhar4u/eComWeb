@@ -1,7 +1,7 @@
 import mongoose from 'mongoose'
 import { collectionDefinitions, applicationCollectionNames } from './collectionDefinitions.js'
 
-const migrationVersion = '001_database_foundation'
+const migrationVersion = '002_dynamic_commerce'
 const sessionDefinition = {
   validator: { $jsonSchema: { bsonType: 'object', required: ['_id', 'expires', 'session'], properties: { _id: { bsonType: 'string', maxLength: 256 }, expires: { bsonType: 'date' }, session: { bsonType: 'string', maxLength: 1048576 } }, additionalProperties: false } },
   indexes: [[{ expires: 1 }, { name: 'ttl_sessions', expireAfterSeconds: 0 }]],
@@ -66,6 +66,11 @@ export async function migrateDatabase({ uri, allowDatabase = ['aurelia_dev', 'au
       const exists = await db.listCollections({ name: collectionName }).hasNext()
       if (!exists) await db.createCollection(collectionName, { validator: definition.validator, validationLevel: 'strict', validationAction: 'error' })
       else await db.command({ collMod: collectionName, validator: definition.validator, validationLevel: 'strict', validationAction: 'error' })
+      if (collectionName === 'inventory_reservations') {
+        for (const index of await db.collection(collectionName).listIndexes().toArray()) {
+          if (index.expireAfterSeconds !== undefined && index.key.expiresAt === 1) await db.collection(collectionName).dropIndex(index.name)
+        }
+      }
       for (const [key, options] of definition.indexes) await ensureIndex(db.collection(collectionName), key, options)
     }
     const sessionsExists = await db.listCollections({ name: 'sessions' }).hasNext()
