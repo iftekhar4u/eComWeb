@@ -11,7 +11,8 @@ export function requireCsrf(req, res, next) {
   if (SAFE_METHODS.has(req.method)) return next()
   const supplied = req.get('x-csrf-token')
   const expected = req.session?.csrfToken
-  if (!supplied || !expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {
+  const suppliedBytes = Buffer.from(supplied || ''), expectedBytes = Buffer.from(expected || '')
+  if (!supplied || !expected || suppliedBytes.length !== expectedBytes.length || !crypto.timingSafeEqual(suppliedBytes, expectedBytes)) {
     return res.status(403).json({ message: 'Invalid CSRF token' })
   }
   next()
