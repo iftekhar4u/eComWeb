@@ -38,7 +38,7 @@ export const ProductVariant = model('ProductVariant', variantSchema)
 
 const categorySchema = new Schema({
   name: { type: String, required: true, trim: true, maxlength: 100 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 120 },
-  parent: { type: Schema.Types.ObjectId, ref: 'Category', default: null }, image: { type: String, maxlength: 2048 }, order: { type: Number, default: 0, min: 0, max: 100000, validate: Number.isInteger }, active: { type: Boolean, default: true },
+  parent: { type: Schema.Types.ObjectId, ref: 'Category', default: null }, image: { type: String, maxlength: 2048 }, description: { type: String, maxlength: 1000 }, order: { type: Number, default: 0, min: 0, max: 100000, validate: Number.isInteger }, active: { type: Boolean, default: true },
 }, timestamps)
 categorySchema.index({ slug: 1 }, { unique: true })
 export const Category = model('Category', categorySchema)
@@ -60,6 +60,7 @@ mediaSchema.index({ provider: 1, providerAssetId: 1 }, { unique: true })
 export const Media = model('Media', mediaSchema)
 
 const sectionSchema = new Schema({
+  slot: { type: String, maxlength: 50 }, eyebrow: { type: String, maxlength: 100 }, image: { type: String, maxlength: 2048 }, buttonText: { type: String, maxlength: 80 },
   type: { type: String, enum: ['hero', 'category_grid', 'product_grid', 'rich_text', 'promo'], required: true }, order: { type: Number, required: true, min: 0, max: 100, validate: Number.isInteger }, visible: { type: Boolean, default: true },
   heading: { type: String, maxlength: 200 }, body: { type: String, maxlength: 10000 }, imageMedia: { type: Schema.Types.ObjectId, ref: 'Media' }, link: { type: String, maxlength: 500 }, productIds: { type: [{ type: Schema.Types.ObjectId, ref: 'Product' }], default: [], validate: (value) => value.length <= 50 },
 }, { _id: true, strict: 'throw' })
@@ -73,12 +74,15 @@ pageSchema.index({ slug: 1 }, { unique: true })
 export const Page = model('Page', pageSchema)
 
 const blogSchema = new Schema({
+  image: { type: String, maxlength: 2048 },
   title: { type: String, required: true, maxlength: 200 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 160 }, excerpt: { type: String, maxlength: 1000 }, content: { type: String, required: true, maxlength: 50000 }, author: id(), status: state(['draft', 'published', 'archived'], 'draft'), seo: { title: { type: String, maxlength: 160 }, description: { type: String, maxlength: 320 } }, publishedAt: Date,
 }, timestamps)
 blogSchema.index({ slug: 1 }, { unique: true })
 export const BlogPost = model('BlogPost', blogSchema)
 
 const settingsSchema = new Schema({
+  shippingPaise: { ...money, default: 9900 }, freeShippingThresholdPaise: { ...money, default: 99900 },
+  testimonials: { type: [{ name: { type: String, required: true, maxlength: 100 }, text: { type: String, required: true, maxlength: 1000 }, rating: { type: Number, min: 1, max: 5, validate: Number.isInteger } }], default: [], validate: v => v.length <= 30 },
   key: { type: String, enum: ['site'], unique: true, required: true }, brandName: { type: String, required: true, maxlength: 100 }, announcement: { type: String, maxlength: 300 }, contactEmail: { type: String, maxlength: 254 }, navigation: { type: [{ label: { type: String, required: true, maxlength: 80 }, href: { type: String, required: true, maxlength: 500 } }], validate: (value) => value.length <= 30 }, footerLinks: { type: [{ label: { type: String, required: true, maxlength: 80 }, href: { type: String, required: true, maxlength: 500 } }], validate: (value) => value.length <= 50 }, socialLinks: { type: [{ platform: { type: String, required: true, maxlength: 30 }, href: { type: String, required: true, maxlength: 500 } }], validate: (value) => value.length <= 20 }, updatedBy: id(),
 }, timestamps)
 export const SiteSettings = model('SiteSettings', settingsSchema)
@@ -94,6 +98,7 @@ export const Wishlist = model('Wishlist', wishlistSchema)
 const addressSnapshotSchema = new Schema({ name: { type: String, required: true, maxlength: 100 }, line1: { type: String, required: true, maxlength: 200 }, line2: { type: String, maxlength: 200 }, city: { type: String, required: true, maxlength: 100 }, state: { type: String, required: true, maxlength: 100 }, postalCode: { type: String, required: true, maxlength: 20 }, country: { type: String, required: true, maxlength: 2 }, phone: { type: String, maxlength: 30 } }, { _id: false, strict: 'throw' })
 const orderItemSchema = new Schema({ variant: id(), sku: { type: String, required: true, maxlength: 64 }, name: { type: String, required: true, maxlength: 160 }, quantity, unitPricePaise: money, lineTotalPaise: money }, { _id: false, strict: 'throw' })
 const orderSchema = new Schema({
+  refundedPaise: { ...money, default: 0 }, requestHash: { type: String, maxlength: 64 }, expiresAt: Date, inventoryStatus: state(['reserved', 'committed', 'released', 'review'], 'reserved'), paymentMethod: state(['razorpay', 'cod'], 'razorpay'), trackingNumber: { type: String, maxlength: 100 },
   orderNumber: { type: String, required: true, uppercase: true, maxlength: 40 }, customer: id(), items: { type: [orderItemSchema], required: true, validate: (value) => value.length >= 1 && value.length <= 100 }, deliveryAddress: { type: addressSnapshotSchema, required: true }, subtotalPaise: money, discountPaise: { ...money, default: 0, required: true }, shippingPaise: { ...money, default: 0, required: true }, totalPaise: money, currency: { type: String, enum: ['INR'], default: 'INR' }, paymentStatus: state(['pending', 'authorized', 'paid', 'failed', 'refunded'], 'pending'), fulfillmentStatus: state(['pending', 'processing', 'shipped', 'delivered', 'cancelled'], 'pending'), idempotencyKey: { type: String, required: true, maxlength: 128 },
 }, timestamps)
 orderSchema.index({ orderNumber: 1 }, { unique: true })
@@ -101,8 +106,10 @@ orderSchema.index({ customer: 1, createdAt: -1 })
 orderSchema.index({ customer: 1, idempotencyKey: 1 }, { unique: true })
 export const Order = model('Order', orderSchema)
 
-const paymentSchema = new Schema({ order: id(), provider: { type: String, enum: ['disabled', 'sandbox'], required: true }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerPaymentId: { type: String, maxlength: 200 }, amountPaise: money, currency: { type: String, enum: ['INR'], default: 'INR' }, status: state(['created', 'pending', 'succeeded', 'failed', 'refunded'], 'created') }, timestamps)
+const paymentSchema = new Schema({ providerOrderId: { type: String, maxlength: 200 }, initializationStartedAt: Date, order: id(), provider: { type: String, enum: ['disabled', 'sandbox', 'razorpay'], required: true }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerPaymentId: { type: String, maxlength: 200 }, amountPaise: money, currency: { type: String, enum: ['INR'], default: 'INR' }, status: state(['created', 'pending', 'succeeded', 'failed', 'refunded'], 'created') }, timestamps)
 paymentSchema.index({ provider: 1, environment: 1, providerPaymentId: 1 }, { unique: true, partialFilterExpression: { providerPaymentId: { $type: 'string' } } })
+paymentSchema.index({ order: 1 }, { unique: true })
+paymentSchema.index({ providerOrderId: 1 }, { unique: true, partialFilterExpression: { providerOrderId: { $type: 'string' } } })
 export const Payment = model('Payment', paymentSchema)
 
 const paymentEventSchema = new Schema({ provider: { type: String, required: true, maxlength: 50 }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerEventId: { type: String, required: true, maxlength: 200 }, payment: { type: Schema.Types.ObjectId, ref: 'Payment' }, payloadHash: { type: String, required: true, maxlength: 128 }, state: state(['received', 'processed', 'ignored', 'failed'], 'received'), processedAt: Date }, timestamps)
@@ -110,7 +117,8 @@ paymentEventSchema.index({ provider: 1, environment: 1, providerEventId: 1 }, { 
 export const PaymentEvent = model('PaymentEvent', paymentEventSchema)
 
 const reservationSchema = new Schema({ order: id(), variant: id(), quantity, expiresAt: { type: Date, required: true }, state: state(['active', 'released', 'consumed', 'expired'], 'active'), releasedAt: Date }, timestamps)
-reservationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
+// Active reservations must survive until the reconciliation worker releases stock.
+reservationSchema.index({ state: 1, expiresAt: 1 })
 reservationSchema.index({ order: 1, variant: 1 }, { unique: true })
 export const InventoryReservation = model('InventoryReservation', reservationSchema)
 
@@ -136,3 +144,9 @@ const auditSchema = new Schema({ actor: { type: Schema.Types.ObjectId, ref: 'Use
 auditSchema.index({ resourceType: 1, resourceId: 1, createdAt: -1 })
 auditSchema.index({ actor: 1, createdAt: -1 })
 export const AuditLog = model('AuditLog', auditSchema)
+
+const subscriberSchema = new Schema({ email: { type: String, required: true, lowercase: true, trim: true, maxlength: 254 }, consentAt: { type: Date, required: true } }, timestamps)
+subscriberSchema.index({ email: 1 }, { unique: true })
+export const Subscriber = model('Subscriber', subscriberSchema)
+const messageSchema = new Schema({ name: { type: String, required: true, maxlength: 100 }, email: { type: String, required: true, maxlength: 254 }, message: { type: String, required: true, maxlength: 3000 }, status: state(['new', 'read'], 'new') }, timestamps)
+export const ContactMessage = model('ContactMessage', messageSchema)
