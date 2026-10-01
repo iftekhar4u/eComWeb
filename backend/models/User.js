@@ -12,6 +12,7 @@ const addressSchema = new mongoose.Schema({
 }, { _id: true, strict: 'throw' })
 
 const userSchema = new mongoose.Schema({
+	phone: { type: String, trim: true, maxlength: 30 },
 	name: { type: String, required: true, trim: true, minlength: 2, maxlength: 100 },
 	email: { type: String, required: true, unique: true, lowercase: true, trim: true, maxlength: 254 },
 	password: { type: String, required: false, select: false, maxlength: 256 },
@@ -35,7 +36,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true, strict: 'throw', optimisticConcurrency: true })
 
 userSchema.pre('validate', function (next) {
-	if (!this.password && !this.google?.subject) this.invalidate('password', 'An account requires a local password or linked Google identity')
+	if ((this.isNew || this.isModified('password') || this.isModified('google')) && !this.password && !this.google?.subject) this.invalidate('password', 'An account requires a local password or linked Google identity')
 	if (this.google?.subject && this.google?.issuer !== 'https://accounts.google.com') this.invalidate('google.issuer', 'Unsupported Google issuer')
 	next()
 })
