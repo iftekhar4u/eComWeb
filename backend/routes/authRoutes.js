@@ -2,14 +2,18 @@ import crypto from 'node:crypto'
 import { Router } from 'express'
 import argon2 from 'argon2'
 import passport from 'passport'
+import { rateLimit } from 'express-rate-limit'
 import { generateSecret, generateURI, verify } from 'otplib'
 import { z } from 'zod'
 import User from '../models/User.js'
-import { protect, protectPendingAdmin, safeUser } from '../middleware/authMiddleware.js'
+import { addressInput, objectId, fail } from '../services/validation.js'
+import { protect, protectPendingAdmin, safeUser, adminMfaRequired } from '../middleware/authMiddleware.js'
 import { issueCsrfToken } from '../middleware/csrfMiddleware.js'
 import { createGoogleState, GOOGLE_STATE_MAX_AGE_MS } from '../config/passport.js'
 
 const router = Router()
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, message: { message: 'Too many attempts. Please try again in 15 minutes.' } })
+router.use(['/login', '/register', '/mfa/setup', '/mfa/verify', '/mfa/recover', '/password'], authLimiter)
 const credentials = z.object({ email: z.string().email().max(254), password: z.string().min(12).max(128) }).strict()
 const registration = credentials.extend({ name: z.string().trim().min(2).max(100) }).strict()
 const mfaCode = z.object({ code: z.string().regex(/^\d{6}$/) }).strict()
@@ -31,13 +35,14 @@ function decryptSecret(value) {
 	return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]).toString('utf8')
 }
 
-async function establishSession(req, user, { reauthenticated = false } = {}) {
+async function establishSession(req, user, { reauthenticated = false, remember = false } = {}) {
 	await new Promise((resolve, reject) => req.session.regenerate((error) => error ? reject(error) : resolve()))
 	await new Promise((resolve, reject) => req.logIn(user, { session: true }, (error) => error ? reject(error) : resolve()))
 	req.session.userId = user._id.toString()
 	req.session.sessionVersion = user.sessionVersion
 	req.session.mfaVerified = user.role !== 'admin'
-	req.session.csrfToken = crypto.randomUUID()
+	req.session.csrfToken = crypto.randomBytes(32).toString('hex')
+	req.session.cookie.maxAge = remember && user.role !== 'admin' ? 7 * 24 * 60 * 60 * 1000 : 30 * 60 * 1000
 	if (reauthenticated) req.session.reauthenticatedAt = Date.now()
 }
 
@@ -53,17 +58,65 @@ router.post('/register', async (req, res, next) => {
 		res.status(201).json({ user: safeUser(user), csrfToken: req.session.csrfToken })
 	} catch (error) { next(error) }
 })
-router.post('/login', (req, res, next) => passport.authenticate('local', async (error, user) => {
+router.post('/login', (req, _res, next) => { req.body = credentials.extend({ remember: z.boolean().default(false) }).parse(req.body); next() }, (req, res, next) => passport.authenticate('local', async (error, user) => {
 	if (error) return next(error)
 	if (!user) return res.status(401).json({ message: 'Invalid email or password' })
 	try {
 		const pendingGoogleLink = req.session.pendingGoogleLink
-		await establishSession(req, user, { reauthenticated: true })
+		await establishSession(req, user, { reauthenticated: true, remember: req.body.remember })
 		if (pendingGoogleLink) req.session.pendingGoogleLink = pendingGoogleLink
-		res.json({ user: safeUser(user), mfaRequired: user.role === 'admin', csrfToken: req.session.csrfToken })
+		res.json({ user: safeUser(user), mfaRequired: user.role === 'admin' && adminMfaRequired(req), csrfToken: req.session.csrfToken })
 	} catch (sessionError) { next(sessionError) }
 })(req, res, next))
 router.post('/logout', (req, res, next) => req.session.destroy((error) => { if (error) return next(error); res.clearCookie('aurelia.sid'); res.json({ message: 'Signed out' }) }))
+router.get('/session', async (req, res) => {
+  if (!req.session?.userId) return res.status(401).json({ message: 'Authentication required' })
+  const user = await User.findById(req.session.userId)
+  if (!user || user.status !== 'active' || user.sessionVersion !== req.session.sessionVersion) return res.status(401).json({ message: 'Authentication required' })
+  res.json({ user: safeUser(user), mfaRequired: user.role === 'admin' && adminMfaRequired(req) && !req.session.mfaVerified })
+})
+router.patch('/me', protect, async (req, res) => {
+  const input = z.object({ name: z.string().trim().min(2).max(100), phone: z.string().regex(/^(?:\+?[0-9]{10,15})?$/).default('') }).strict().parse(req.body)
+  const user = await User.findByIdAndUpdate(req.user._id, { $set: input }, { new: true, runValidators: true })
+  res.json({ user: safeUser(user) })
+})
+router.get('/addresses', protect, (req, res) => res.json({ addresses: req.user.addresses }))
+router.post('/addresses', protect, async (req, res) => {
+  const address = addressInput.parse(req.body)
+  if (req.user.addresses.length >= 10) throw fail(400, 'You can save up to ten addresses. Remove an old address first.')
+  req.user.addresses.push(address)
+  await req.user.save()
+  res.status(201).json({ addresses: req.user.addresses })
+})
+router.delete('/addresses/:id', protect, async (req, res) => {
+  const id = objectId.parse(req.params.id)
+  const user = await User.findByIdAndUpdate(req.user._id, { $pull: { addresses: { _id: id } } }, { new: true })
+  res.json({ addresses: user.addresses })
+})
+router.post('/password', protect, async (req, res) => {
+  const { currentPassword, newPassword } = z.object({ currentPassword: z.string().min(1).max(128), newPassword: z.string().min(12).max(128) }).strict().parse(req.body)
+  const user = await User.findById(req.user._id).select('+password')
+  if (!user.password) throw fail(409, 'Manage your Google account password through Google.')
+  if (!(await argon2.verify(user.password, currentPassword))) throw fail(401, 'Current password is incorrect.')
+  user.password = await argon2.hash(newPassword, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 })
+  user.sessionVersion += 1
+  await user.save()
+  await new Promise((resolve, reject) => req.session.destroy(error => error ? reject(error) : resolve()))
+  res.clearCookie('aurelia.sid').json({ message: 'Password changed. Sign in with your new password.' })
+})
+router.post('/mfa/recover', protectPendingAdmin, async (req, res) => {
+  const { code } = z.object({ code: z.string().regex(/^[a-f0-9]{12}$/) }).strict().parse(req.body)
+  const hashes = req.user.mfa.recoveryCodeHashes || []
+  for (const hash of hashes) {
+    if (await argon2.verify(hash, code)) {
+      const used = await User.updateOne({ _id: req.user._id, 'mfa.recoveryCodeHashes': hash }, { $pull: { 'mfa.recoveryCodeHashes': hash } })
+      if (!used.modifiedCount) break
+      req.session.mfaVerified = true
+      return res.json({ user: safeUser(req.user) })
+    }
+  }
+  res.status(401).json({ message: 'Invalid or already used recovery code' })
+})
 router.get('/me', protect, (req, res) => res.json({ user: safeUser(req.user) }))
 router.post('/google/link', protect, async (req, res, next) => {
 	try {
@@ -86,15 +139,15 @@ router.get('/google', (req, res, next) => {
 	passport.authenticate('google', { scope: ['email', 'profile'], state })(req, res, next)
 })
 router.get('/google/callback', (req, res, next) => {
-	if (!req.app.locals.googleAuthEnabled) return res.redirect('/login?error=google-unavailable')
+	if (!req.app.locals.googleAuthEnabled) return res.redirect(`${req.app.locals.clientUrl}/login?error=google-unavailable`)
 	passport.authenticate('google', async (error, user, info) => {
 		const issuedAt = Number(info?.state?.issuedAt || req.session.googleAuth?.issuedAt || 0)
 		delete req.session.googleAuth
 		if (error) return next(error)
-		if (!issuedAt || Date.now() - issuedAt > GOOGLE_STATE_MAX_AGE_MS) return res.redirect('/login?error=google-expired')
+		if (!issuedAt || Date.now() - issuedAt > GOOGLE_STATE_MAX_AGE_MS) return res.redirect(`${req.app.locals.clientUrl}/login?error=google-expired`)
 		if (!user) {
 			if (info?.code === 'GOOGLE_EMAIL_COLLISION' && info.google) req.session.pendingGoogleLink = { ...info.google, expiresAt: Date.now() + GOOGLE_STATE_MAX_AGE_MS }
-			return res.redirect(`/login?error=${info?.code === 'GOOGLE_EMAIL_COLLISION' ? 'google-account-link-required' : 'google-unavailable'}`)
+			return res.redirect(`${req.app.locals.clientUrl}/login?error=${info?.code === 'GOOGLE_EMAIL_COLLISION' ? 'google-account-link-required' : 'google-unavailable'}`)
 		}
 		try {
 			await establishSession(req, user)
@@ -104,18 +157,19 @@ router.get('/google/callback', (req, res, next) => {
 })
 router.post('/mfa/setup', protectPendingAdmin, async (req, res, next) => {
 	try {
+		if (req.user.mfa?.enabled) return res.status(409).json({ message: 'MFA is already enrolled. Use your authenticator or a recovery code.' })
 		const secret = generateSecret()
 		const recoveryCodes = Array.from({ length: 8 }, () => crypto.randomBytes(6).toString('hex'))
 		req.user.mfa.secretEncrypted = encryptSecret(secret)
 		req.user.mfa.recoveryCodeHashes = await Promise.all(recoveryCodes.map((code) => argon2.hash(code, { type: argon2.argon2id })))
 		await req.user.save()
-		res.json({ otpauthUrl: generateURI({ issuer: 'AURELIA', label: req.user.email, secret }), recoveryCodes })
+		res.json({ secret, otpauthUrl: generateURI({ issuer: 'AURELIA', label: req.user.email, secret }), recoveryCodes })
 	} catch (error) { next(error) }
 })
 router.post('/mfa/verify', protectPendingAdmin, async (req, res, next) => {
 	try {
 		const { code } = mfaCode.parse(req.body)
-		if (!req.user.mfa.secretEncrypted || !(await verify({ token: code, secret: decryptSecret(req.user.mfa.secretEncrypted) }))) return res.status(401).json({ message: 'Invalid MFA code' })
+		if (!req.user.mfa.secretEncrypted || !(await verify({ token: code, secret: decryptSecret(req.user.mfa.secretEncrypted) })).valid) return res.status(401).json({ message: 'Invalid MFA code' })
 		req.user.mfa.enabled = true
 		await req.user.save()
 		req.session.mfaVerified = true
