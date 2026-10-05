@@ -1,7 +1,15 @@
 import { Router } from 'express'
+import { z } from 'zod'
 import { protect } from '../middleware/authMiddleware.js'
+import { Wishlist } from '../models/domainModels.js'
+import { objectId } from '../services/validation.js'
+import { findPublicProducts } from '../services/catalog.js'
 const router = Router(); router.use(protect)
-router.get('/', async (req, res, next) => { try { await req.user.populate('wishlist'); res.json(req.user.wishlist) } catch (error) { next(error) } })
-router.post('/:productId', async (req, res, next) => { try { if (!req.user.wishlist.some((id) => id.toString() === req.params.productId)) req.user.wishlist.push(req.params.productId); await req.user.save(); res.json(req.user.wishlist) } catch (error) { next(error) } })
-router.delete('/:productId', async (req, res, next) => { try { req.user.wishlist = req.user.wishlist.filter((id) => id.toString() !== req.params.productId); await req.user.save(); res.json(req.user.wishlist) } catch (error) { next(error) } })
+router.get('/', async (req, res) => { const list = await Wishlist.findOne({ customer: req.user._id }).lean(); res.json({ items: await findPublicProducts(list?.products || []) }) })
+router.put('/', async (req, res) => {
+  const { productIds } = z.object({ productIds: z.array(objectId).max(100) }).strict().parse(req.body)
+  const products = await findPublicProducts([...new Set(productIds)])
+  await Wishlist.updateOne({ customer: req.user._id }, { $set: { products: products.map(p => p._id) } }, { upsert: true, runValidators: true })
+  res.json({ items: products })
+})
 export default router
