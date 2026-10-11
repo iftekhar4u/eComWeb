@@ -1,9 +1,7 @@
-import emailRoutes from '../email/publicRoutes.js'
-import adminEmailRoutes from '../email/adminRoutes.js'
-import { createEmailService } from '../email/service.js'
 import securityRoutes from './security.js'
+import { createIntegrationStore } from '../integrations/store.js'
+import { integrationRoutes, publicIntegrationRoutes } from '../integrations/routes.js'
 import readyRoutes from './routes.js'
-import { publicSeoRoutes, adminSeoRoutes, crawlRoutes, seoHtml } from '../seo/routes.js'
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
@@ -27,14 +25,18 @@ import cartRoutes from '../routes/cartRoutes.js'
 import { requireCsrf } from '../middleware/csrfMiddleware.js'
 import { errorHandler, notFound } from '../middleware/errorMiddleware.js'
 import { configurePassport } from '../config/passport.js'
+import { adminSeoRoutes, publicSeoRoutes, crawlRoutes, seoHtml } from '../seo/routes.js'
+import adminEmailRoutes from '../email/adminRoutes.js'
+import publicEmailRoutes from '../email/publicRoutes.js'
+import { createEmailService } from '../email/service.js'
 
-export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory, emailService } = {}) {
+export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory, integrations = createIntegrationStore(config), emailService } = {}) {
   const app = express()
   app.locals.config = config
-  app.locals.email = emailService || createEmailService(config)
   app.locals.gateway = gateway || createRazorpay(config)
   app.locals.googleAuthEnabled = config.GOOGLE_AUTH_ENABLED
   app.locals.clientUrl = config.CLIENT_URL
+  app.locals.email = emailService || createEmailService(config)
   app.disable('x-powered-by')
   app.set('trust proxy', config.TRUST_PROXY)
   app.use(helmet({ contentSecurityPolicy: config.NODE_ENV === 'production' ? { directives: { imgSrc: ["'self'",'data:','https:'] } } : false }))
@@ -56,11 +58,12 @@ export function createReadyApp({ config = getConfig(), store, gateway, staticDir
   app.use(passport.session())
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 200, standardHeaders: 'draft-8', legacyHeaders: false }))
   app.get('/api/health', (_req, res) => res.json({ status: 'ok', brand: 'AURELIA' }))
-  app.use('/api/email', requireCsrf, emailRoutes)
-  app.use('/api/admin/email', requireCsrf, adminEmailRoutes)
   app.use('/api/seo', publicSeoRoutes)
   app.use('/api/admin/seo', adminSeoRoutes)
-  app.use(crawlRoutes)
+  app.use('/api/email', requireCsrf, publicEmailRoutes)
+  app.use('/api/admin/email', requireCsrf, adminEmailRoutes)
+  app.use('/api/integrations', publicIntegrationRoutes(integrations))
+  app.use('/api/admin-ready/integrations', requireCsrf, integrationRoutes({ store: integrations, config }))
   app.use('/api/admin-ready/security', requireCsrf, securityRoutes)
   app.use('/api/admin-ready', requireCsrf, readyRoutes)
   app.use('/api/admin/studio', requireCsrf, adminStudioRoutes)
@@ -76,10 +79,10 @@ export function createReadyApp({ config = getConfig(), store, gateway, staticDir
   app.use('/api/products', productRoutes)
   app.use('/api/wishlist', requireCsrf, wishlistRoutes)
   app.use('/api/cart', requireCsrf, cartRoutes)
+  app.use(crawlRoutes)
   if(staticDirectory) {
     app.use(seoHtml(staticDirectory))
-    app.use(express.static(staticDirectory))
-    app.get('/{*path}',(req,res,next)=>req.path==='/api'||req.path.startsWith('/api/')?next():res.sendFile(`${staticDirectory}/index.html`))
+    app.use(express.static(staticDirectory, { index: false }))
   }
   app.use(notFound)
   app.use(errorHandler)
@@ -88,5 +91,5 @@ export function createReadyApp({ config = getConfig(), store, gateway, staticDir
 
 export async function connectDatabase(config = getConfig()) {
   if (config.NODE_ENV === 'test' && !config.MONGO_URI) return
-  await mongoose.connect(config.MONGO_URI || getMongoUri(config), { serverSelectionTimeoutMS: 5000, autoIndex: false, autoCreate: false })
+  await mongoose.connect(config.MONGO_URI || getMongoUri(config), { serverSelectionTimeoutMS: 30000, autoIndex: false, autoCreate: false })
 }
