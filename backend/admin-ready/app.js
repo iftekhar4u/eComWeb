@@ -1,5 +1,9 @@
+import emailRoutes from '../email/publicRoutes.js'
+import adminEmailRoutes from '../email/adminRoutes.js'
+import { createEmailService } from '../email/service.js'
 import securityRoutes from './security.js'
 import readyRoutes from './routes.js'
+import { publicSeoRoutes, adminSeoRoutes, crawlRoutes, seoHtml } from '../seo/routes.js'
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
@@ -24,9 +28,10 @@ import { requireCsrf } from '../middleware/csrfMiddleware.js'
 import { errorHandler, notFound } from '../middleware/errorMiddleware.js'
 import { configurePassport } from '../config/passport.js'
 
-export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory } = {}) {
+export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory, emailService } = {}) {
   const app = express()
   app.locals.config = config
+  app.locals.email = emailService || createEmailService(config)
   app.locals.gateway = gateway || createRazorpay(config)
   app.locals.googleAuthEnabled = config.GOOGLE_AUTH_ENABLED
   app.locals.clientUrl = config.CLIENT_URL
@@ -51,6 +56,11 @@ export function createReadyApp({ config = getConfig(), store, gateway, staticDir
   app.use(passport.session())
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 200, standardHeaders: 'draft-8', legacyHeaders: false }))
   app.get('/api/health', (_req, res) => res.json({ status: 'ok', brand: 'AURELIA' }))
+  app.use('/api/email', requireCsrf, emailRoutes)
+  app.use('/api/admin/email', requireCsrf, adminEmailRoutes)
+  app.use('/api/seo', publicSeoRoutes)
+  app.use('/api/admin/seo', adminSeoRoutes)
+  app.use(crawlRoutes)
   app.use('/api/admin-ready/security', requireCsrf, securityRoutes)
   app.use('/api/admin-ready', requireCsrf, readyRoutes)
   app.use('/api/admin/studio', requireCsrf, adminStudioRoutes)
@@ -67,6 +77,7 @@ export function createReadyApp({ config = getConfig(), store, gateway, staticDir
   app.use('/api/wishlist', requireCsrf, wishlistRoutes)
   app.use('/api/cart', requireCsrf, cartRoutes)
   if(staticDirectory) {
+    app.use(seoHtml(staticDirectory))
     app.use(express.static(staticDirectory))
     app.get('/{*path}',(req,res,next)=>req.path==='/api'||req.path.startsWith('/api/')?next():res.sendFile(`${staticDirectory}/index.html`))
   }
