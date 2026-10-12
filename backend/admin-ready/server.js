@@ -1,3 +1,6 @@
+import { ensureEmailDatabase } from '../email/database.js'
+import { createEmailService } from '../email/service.js'
+import { bindEmailEvents } from '../email/events.js'
 import mongoose from 'mongoose'
 import {fileURLToPath} from 'node:url'
 import {access} from 'node:fs/promises'
@@ -8,10 +11,15 @@ import { createReadyApp, connectDatabase } from './app.js'
 import { createRazorpay } from '../services/razorpay.js'
 import { reconcileExpired } from '../services/commerce.js'
 import {prepareDatabase} from './database.js'
+import {ensureSeoDatabase} from '../seo/database.js'
 const config=getConfig()
 if(!config.SESSION_SECRET||!config.MFA_ENCRYPTION_KEY)throw new Error('Fill backend/.env first: SESSION_SECRET and MFA_ENCRYPTION_KEY are required. Run node admin-tools/setup.mjs from the project root.')
 await connectDatabase(config)
 const database=await prepareDatabase(mongoose.connection.db)
+await ensureSeoDatabase(mongoose.connection.db)
+await ensureEmailDatabase(mongoose.connection.db)
+const emailService=createEmailService(config)
+bindEmailEvents(emailService.event)
 console.log(database.initialized?'Empty application database initialized; no sample business data added.':'Existing database records and configuration preserved.')
 const email=(process.env.ADMIN_EMAIL||'').trim().toLowerCase(),password=process.env.ADMIN_PASSWORD||'',name=(process.env.ADMIN_NAME||'').trim()
 if(email){
@@ -32,7 +40,8 @@ const check=async()=>{if(checking||!gateway.enabled)return;checking=true;try{awa
 const timer=setInterval(check,60000);timer.unref();void check()
 const staticDirectory=config.NODE_ENV==='production'?fileURLToPath(new URL('../../frontend/dist-admin/',import.meta.url)):undefined
 if(staticDirectory) await access(`${staticDirectory}/index.html`).catch(()=>{throw new Error('Build the admin frontend first: node admin-tools/build.mjs')})
-const app=createReadyApp({config,gateway,staticDirectory})
+const app=createReadyApp({config,gateway,staticDirectory,emailService})
+const stopEmail=emailService.start()
 const server=app.listen(config.PORT,()=>console.log(`AURELIA ready API: http://localhost:${config.PORT}; admin: ${config.CLIENT_URL}/admin`))
-const shutdown=()=>{clearInterval(timer);server.close(async()=>{await mongoose.disconnect();process.exit(0)})}
+const shutdown=()=>{clearInterval(timer);server.close(async()=>{await stopEmail();await mongoose.disconnect();process.exit(0)})}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown)
