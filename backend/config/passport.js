@@ -1,3 +1,4 @@
+import { safeEmailEvent } from '../email/events.js'
 import crypto from 'node:crypto'
 import argon2 from 'argon2'
 import { OAuth2Client } from 'google-auth-library'
@@ -51,6 +52,7 @@ async function findOrCreateGoogleUser(issuer, profile, idToken, googleClient, cl
       role: 'customer',
       status: 'active',
     })
+    await safeEmailEvent('welcome', { userId: user._id, email: user.email, name: user.name })
     return done(null, user)
   } catch (error) {
     if (error?.code === 11000) {
