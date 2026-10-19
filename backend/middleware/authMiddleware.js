@@ -23,7 +23,7 @@ export function requireAdmin(req, res, next) {
 }
 
 export function safeUser(user) {
-	return { id: user._id, name: user.name, email: user.email, role: user.role, status: user.status, mfaEnabled: Boolean(user.mfa?.enabled), phone: user.phone || '', googleLinked: Boolean(user.google?.subject) }
+	return { id: user._id, name: user.name, email: user.email, role: user.role, status: user.status, mfaEnabled: Boolean(user.mfa?.enabled), phone: user.phone || '', emailVerified: Boolean(user.emailVerifiedAt), googleLinked: Boolean(user.google?.subject) }
 }
 
 export async function protectPendingAdmin(req, res, next) {
