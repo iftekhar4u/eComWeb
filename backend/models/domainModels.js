@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import { seoSchema, seoSettingsSchema, seoPagesSchema } from '../seo/schema.js'
 
 const { Schema } = mongoose
 const id = () => ({ type: Schema.Types.ObjectId, required: true })
@@ -16,6 +17,7 @@ const model = (name, schema) => mongoose.models[name] || mongoose.model(name, sc
 const tokenSchema = new Schema({
   user: id(), tokenHash: { type: String, required: true, maxlength: 128 },
   purpose: state(['email_verification', 'password_reset'], 'email_verification'),
+  sessionVersion: { type: Number, min: 0, max: 2147483647, validate: Number.isInteger },
   expiresAt: { type: Date, required: true }, consumedAt: { type: Date, default: null },
 }, timestamps)
 tokenSchema.index({ tokenHash: 1, purpose: 1 }, { unique: true })
@@ -37,6 +39,7 @@ variantSchema.index({ product: 1, active: 1 })
 export const ProductVariant = model('ProductVariant', variantSchema)
 
 const categorySchema = new Schema({
+  seo: { type: seoSchema, default: undefined },
   name: { type: String, required: true, trim: true, maxlength: 100 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 120 },
   parent: { type: Schema.Types.ObjectId, ref: 'Category', default: null }, image: { type: String, maxlength: 2048 }, description: { type: String, maxlength: 1000 }, order: { type: Number, default: 0, min: 0, max: 100000, validate: Number.isInteger }, active: { type: Boolean, default: true },
 }, timestamps)
@@ -44,6 +47,7 @@ categorySchema.index({ slug: 1 }, { unique: true })
 export const Category = model('Category', categorySchema)
 
 const collectionSchema = new Schema({
+  seo: { type: seoSchema, default: undefined },
   name: { type: String, required: true, trim: true, maxlength: 120 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 140 }, description: { type: String, maxlength: 1000 },
   products: { type: [{ type: Schema.Types.ObjectId, ref: 'Product' }], default: [], validate: (value) => value.length <= 500 },
   status: state(['draft', 'published', 'archived'], 'draft'), order: { type: Number, default: 0, min: 0, max: 100000, validate: Number.isInteger },
@@ -68,19 +72,20 @@ const homepageSchema = new Schema({ key: { type: String, enum: ['home'], unique:
 export const Homepage = model('Homepage', homepageSchema)
 
 const pageSchema = new Schema({
-  title: { type: String, required: true, maxlength: 200 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 160 }, content: { type: String, required: true, maxlength: 50000 }, status: state(['draft', 'published', 'archived'], 'draft'), seo: { title: { type: String, maxlength: 160 }, description: { type: String, maxlength: 320 } }, author: id(), publishedAt: Date,
+  title: { type: String, required: true, maxlength: 200 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 160 }, content: { type: String, required: true, maxlength: 50000 }, status: state(['draft', 'published', 'archived'], 'draft'), seo: { type: seoSchema, default: undefined }, author: id(), publishedAt: Date,
 }, timestamps)
 pageSchema.index({ slug: 1 }, { unique: true })
 export const Page = model('Page', pageSchema)
 
 const blogSchema = new Schema({
   image: { type: String, maxlength: 2048 },
-  title: { type: String, required: true, maxlength: 200 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 160 }, excerpt: { type: String, maxlength: 1000 }, content: { type: String, required: true, maxlength: 50000 }, author: id(), status: state(['draft', 'published', 'archived'], 'draft'), seo: { title: { type: String, maxlength: 160 }, description: { type: String, maxlength: 320 } }, publishedAt: Date,
+  title: { type: String, required: true, maxlength: 200 }, slug: { type: String, required: true, lowercase: true, trim: true, maxlength: 160 }, excerpt: { type: String, maxlength: 1000 }, content: { type: String, required: true, maxlength: 50000 }, author: id(), status: state(['draft', 'published', 'archived'], 'draft'), seo: { type: seoSchema, default: undefined }, publishedAt: Date,
 }, timestamps)
 blogSchema.index({ slug: 1 }, { unique: true })
 export const BlogPost = model('BlogPost', blogSchema)
 
 const settingsSchema = new Schema({
+  seoSettings: { type: seoSettingsSchema, default: undefined }, seoPages: { type: seoPagesSchema, default: undefined },
   shippingPaise: { ...money, default: 9900 }, freeShippingThresholdPaise: { ...money, default: 99900 },
   testimonials: { type: [{ name: { type: String, required: true, maxlength: 100 }, text: { type: String, required: true, maxlength: 1000 }, rating: { type: Number, min: 1, max: 5, validate: Number.isInteger } }], default: [], validate: v => v.length <= 30 },
   key: { type: String, enum: ['site'], unique: true, required: true }, brandName: { type: String, required: true, maxlength: 100 }, announcement: { type: String, maxlength: 300 }, contactEmail: { type: String, maxlength: 254 }, navigation: { type: [{ label: { type: String, required: true, maxlength: 80 }, href: { type: String, required: true, maxlength: 500 } }], validate: (value) => value.length <= 30 }, footerLinks: { type: [{ label: { type: String, required: true, maxlength: 80 }, href: { type: String, required: true, maxlength: 500 } }], validate: (value) => value.length <= 50 }, socialLinks: { type: [{ platform: { type: String, required: true, maxlength: 30 }, href: { type: String, required: true, maxlength: 500 } }], validate: (value) => value.length <= 20 }, updatedBy: id(),
@@ -145,7 +150,7 @@ auditSchema.index({ resourceType: 1, resourceId: 1, createdAt: -1 })
 auditSchema.index({ actor: 1, createdAt: -1 })
 export const AuditLog = model('AuditLog', auditSchema)
 
-const subscriberSchema = new Schema({ email: { type: String, required: true, lowercase: true, trim: true, maxlength: 254 }, consentAt: { type: Date, required: true } }, timestamps)
+const subscriberSchema = new Schema({ subscriptionStatus: { type: String, enum: ['pending', 'subscribed', 'unsubscribed'], default: 'pending' }, confirmTokenHash: { type: String, maxlength: 64, select: false }, confirmExpiresAt: Date, confirmedAt: Date, unsubscribedAt: Date, email: { type: String, required: true, lowercase: true, trim: true, maxlength: 254 }, consentAt: { type: Date, required: true } }, timestamps)
 subscriberSchema.index({ email: 1 }, { unique: true })
 export const Subscriber = model('Subscriber', subscriberSchema)
 const messageSchema = new Schema({ name: { type: String, required: true, maxlength: 100 }, email: { type: String, required: true, maxlength: 254 }, message: { type: String, required: true, maxlength: 3000 }, status: state(['new', 'read'], 'new') }, timestamps)
