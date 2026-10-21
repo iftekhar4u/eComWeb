@@ -1,4 +1,6 @@
+import { orderEmailEvents } from '../email/events.js'
 import { Router } from 'express'
+import { seoInput } from '../seo/schema.js'
 import { z } from 'zod'
 import Product from '../models/Product.js'
 import User from '../models/User.js'
@@ -11,10 +13,10 @@ const money = z.number().int().min(0).max(100000000)
 const text = (max) => z.string().trim().max(max)
 const status = z.enum(['draft', 'published', 'archived'])
 const pagination = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), search: text(100).default('') }).strict()
-const productInput = z.object({ name: text(160).min(2), slug, description: text(10000), shortDescription: text(500).default(''), category: slug, gender: z.enum(['women', 'men', 'unisex']), price: money.min(100), compareAtPrice: money.optional(), stock: z.number().int().min(0).max(100000000), sku: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/), thumbnail: imageUrl, images: z.array(imageUrl).max(12).default([]), benefits: z.array(text(500)).max(50).default([]), status, bestSeller: z.boolean(), newArrival: z.boolean(), featured: z.boolean().default(false), version: z.number().int().optional() }).strict().refine(p => !p.compareAtPrice || p.compareAtPrice >= p.price, 'Original price must be at least selling price')
-const categoryInput = z.object({ name: text(100).min(2), slug, description: text(1000).default(''), image: imageUrl, order: z.number().int().min(0).max(100000), active: z.boolean() }).strict()
-const articleInput = z.object({ title: text(200).min(2), slug, content: text(50000).min(1), status, excerpt: text(1000).optional(), image: imageUrl.optional() }).strict()
-const collectionInput = z.object({ name: text(120).min(2), slug, description: text(1000), products: z.array(objectId).max(500), status, order: z.number().int().min(0).max(100000) }).strict()
+const productInput = z.object({ seo: seoInput.optional(), name: text(160).min(2), slug, description: text(10000), shortDescription: text(500).default(''), category: slug, gender: z.enum(['women', 'men', 'unisex']), price: money.min(100), compareAtPrice: money.optional(), stock: z.number().int().min(0).max(100000000), sku: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/), thumbnail: imageUrl, images: z.array(imageUrl).max(12).default([]), benefits: z.array(text(500)).max(50).default([]), status, bestSeller: z.boolean(), newArrival: z.boolean(), featured: z.boolean().default(false), version: z.number().int().optional() }).strict().refine(p => !p.compareAtPrice || p.compareAtPrice >= p.price, 'Original price must be at least selling price')
+const categoryInput = z.object({ seo: seoInput.optional(), name: text(100).min(2), slug, description: text(1000).default(''), image: imageUrl, order: z.number().int().min(0).max(100000), active: z.boolean() }).strict()
+const articleInput = z.object({ seo: seoInput.optional(), title: text(200).min(2), slug, content: text(50000).min(1), status, excerpt: text(1000).optional(), image: imageUrl.optional() }).strict()
+const collectionInput = z.object({ seo: seoInput.optional(), name: text(120).min(2), slug, description: text(1000), products: z.array(objectId).max(500), status, order: z.number().int().min(0).max(100000) }).strict()
 const resources = { categories: [Category, categoryInput], blogs: [BlogPost, articleInput], pages: [Page, articleInput.omit({ excerpt: true, image: true })], collections: [ProductCollection, collectionInput] }
 async function audit(req, action, type, id) { await AuditLog.create({ actor: req.user._id, action, resourceType: type, resourceId: String(id), summary: `${action} ${type}` }) }
 router.get('/dashboard', async (req, res) => {
@@ -83,6 +85,7 @@ router.patch('/orders/:id', async (req, res) => {
   } else {
     order = await transaction(async session => {
       const current = await Order.findById(order._id).session(session)
+      const beforeEmail = { paymentStatus: current.paymentStatus, fulfillmentStatus: current.fulfillmentStatus, refundedPaise: current.refundedPaise }
       if (current.inventoryStatus !== 'committed') throw fail(409, 'Inventory must be confirmed before fulfillment.')
       if (current.paymentMethod !== 'cod' && current.paymentStatus !== 'paid') throw fail(409, 'Payment must be captured before fulfillment.')
       const transitions = { processing: ['processing', 'shipped', 'cancelled'], shipped: ['shipped', 'delivered'], delivered: ['delivered'] }
@@ -98,7 +101,7 @@ router.patch('/orders/:id', async (req, res) => {
       }
       current.fulfillmentStatus = fulfillmentStatus; current.trackingNumber = trackingNumber
       if (current.paymentMethod === 'cod' && fulfillmentStatus === 'delivered') current.paymentStatus = 'paid'
-      await current.save({ session }); return current
+      await current.save({ session }); await orderEmailEvents(beforeEmail, current, session); return current
     })
   }
   await audit(req, 'update', 'order', order._id); res.json({ order })
