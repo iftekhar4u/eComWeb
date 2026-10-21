@@ -1,3 +1,4 @@
+import { safeEmailEvent } from '../email/events.js'
 import crypto from 'node:crypto'
 import { Router } from 'express'
 import argon2 from 'argon2'
@@ -55,6 +56,7 @@ router.post('/register', async (req, res, next) => {
 		if (existing) return res.status(400).json({ message: 'Unable to create account with those details' })
 		const user = await User.create({ name: input.name, email: input.email, password: await argon2.hash(input.password, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 }) })
 		await establishSession(req, user)
+		await safeEmailEvent('signup', { userId: user._id, email: user.email, name: user.name })
 		res.status(201).json({ user: safeUser(user), csrfToken: req.session.csrfToken })
 	} catch (error) { next(error) }
 })
@@ -99,8 +101,9 @@ router.post('/password', protect, async (req, res) => {
   if (!user.password) throw fail(409, 'Manage your Google account password through Google.')
   if (!(await argon2.verify(user.password, currentPassword))) throw fail(401, 'Current password is incorrect.')
   user.password = await argon2.hash(newPassword, { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 })
-  user.sessionVersion += 1
-  await user.save()
+  const changed = await User.updateOne({ _id: user._id, sessionVersion: user.sessionVersion }, { $set: { password: user.password }, $inc: { sessionVersion: 1 } }, { runValidators: true })
+  if (!changed.matchedCount) throw fail(409, 'Account changed. Sign in again before changing your password.')
+  await safeEmailEvent('password_changed', { userId: user._id, email: user.email, name: user.name, sessionVersion: user.sessionVersion + 1 })
   await new Promise((resolve, reject) => req.session.destroy(error => error ? reject(error) : resolve()))
   res.clearCookie('aurelia.sid').json({ message: 'Password changed. Sign in with your new password.' })
 })
