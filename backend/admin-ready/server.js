@@ -1,3 +1,4 @@
+import { migrationVersion } from '../db/migrate.js'
 import mongoose from 'mongoose'
 import { fileURLToPath } from 'node:url'
 import { access } from 'node:fs/promises'
@@ -5,8 +6,8 @@ import argon2 from 'argon2'
 import User from '../models/User.js'
 import { getConfig } from '../config/env.js'
 import { createReadyApp, connectDatabase } from './app.js'
-import { createRazorpay } from '../services/razorpay.js'
-import { reconcileExpired } from '../services/commerce.js'
+import { createPaymentSettings } from '../payments/settings.js'
+import { createPaymentWorker } from '../payments/worker.js'
 import { prepareDatabase } from './database.js'
 import { createIntegrationStore } from '../integrations/store.js'
 import { resolveDatabaseConfig } from '../integrations/atlas.js'
@@ -25,6 +26,11 @@ try { await connectDatabase(config) } catch (error) {
 }
 console.log('Database connected successfully:', connectedDatabaseTarget())
 const database = await prepareDatabase(mongoose.connection.db)
+if (database.initialized) {
+  await mongoose.connection.db.collection('schema_migrations').updateOne({ version: migrationVersion }, { $setOnInsert: { version: migrationVersion, appliedAt: new Date() } }, { upsert: true })
+} else if (!await mongoose.connection.db.collection('schema_migrations').findOne({ version: migrationVersion })) {
+  throw new Error('Payment schema upgrade required. Back up the database, run npm run db:migrate -- --dry-run from backend, then npm run db:migrate before restarting. See docs/PAYMENTS_SETUP.md; production requires the documented explicit database confirmation.')
+}
 await ensureSeoDatabase(mongoose.connection.db)
 await ensureEmailDatabase(mongoose.connection.db)
 console.log(database.initialized ? 'Empty application database initialized; no sample business data added.' : 'Existing database records and configuration preserved.')
@@ -43,21 +49,19 @@ if (email) {
 }
 const emailService = createEmailService(config)
 bindEmailEvents(emailService.event)
-const gateway = createRazorpay(config)
-let checking = false
-const check = async () => { if (checking || !gateway.enabled) return; checking = true; try { await reconcileExpired(gateway) } catch (e) { console.error('Payment reconciliation failed:', e.message) } finally { checking = false } }
-const timer = setInterval(check, 60000); timer.unref(); void check()
+const paymentSettings = createPaymentSettings(config)
 const staticDirectory = config.NODE_ENV === 'production' ? fileURLToPath(new URL('../../frontend/dist-admin/', import.meta.url)) : undefined
 if (staticDirectory) await access(`${staticDirectory}/index.html`).catch(() => { throw new Error('Build the admin frontend first: node admin-tools/build.mjs') })
-const app = createReadyApp({ config, gateway, staticDirectory, integrations, emailService })
+const app = createReadyApp({ config, paymentSettings, staticDirectory, integrations, emailService })
 const server = app.listen(config.PORT, () => console.log(`AURELIA ready API: http://localhost:${config.PORT}; admin: ${config.CLIENT_URL}/admin`))
 const stopEmail = emailService.start()
+const stopPayments = createPaymentWorker(paymentSettings).start()
 let stopping = false
 const shutdown = () => {
   if (stopping) return
   stopping = true
-  clearInterval(timer)
   server.close(async () => {
+    await stopPayments()
     await stopEmail()
     bindEmailEvents(null)
     await mongoose.disconnect()
