@@ -1,3 +1,5 @@
+import { createPaymentSettings } from '../payments/settings.js'
+import paymentAdminRoutes from '../payments/adminRoutes.js'
 import securityRoutes from './security.js'
 import { createIntegrationStore } from '../integrations/store.js'
 import { integrationRoutes, publicIntegrationRoutes } from '../integrations/routes.js'
@@ -30,18 +32,19 @@ import adminEmailRoutes from '../email/adminRoutes.js'
 import publicEmailRoutes from '../email/publicRoutes.js'
 import { createEmailService } from '../email/service.js'
 
-export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory, integrations = createIntegrationStore(config), emailService } = {}) {
+export function createReadyApp({ config = getConfig(), store, gateway, staticDirectory, integrations = createIntegrationStore(config), emailService, paymentSettings } = {}) {
   const app = express()
   app.locals.config = config
   app.locals.gateway = gateway || createRazorpay(config)
+  app.locals.payments = paymentSettings || createPaymentSettings(config, gateway)
   app.locals.googleAuthEnabled = config.GOOGLE_AUTH_ENABLED
   app.locals.clientUrl = config.CLIENT_URL
   app.locals.email = emailService || createEmailService(config)
   app.disable('x-powered-by')
   app.set('trust proxy', config.TRUST_PROXY)
-  app.use(helmet({ contentSecurityPolicy: config.NODE_ENV === 'production' ? { directives: { imgSrc: ["'self'",'data:','https:'] } } : false }))
+  app.use(helmet({ contentSecurityPolicy: config.NODE_ENV === 'production' ? { directives: { imgSrc: ["'self'", 'data:', 'https:'], scriptSrc: ["'self'", 'https://checkout.razorpay.com'], frameSrc: ["'self'", 'https://api.razorpay.com', 'https://checkout.razorpay.com'], connectSrc: ["'self'", 'https://api.razorpay.com', 'https://checkout.razorpay.com'], formAction: ["'self'", 'https://api.razorpay.com'] } } : false }))
   app.use(cors({ origin: config.CLIENT_URL, credentials: true }))
-  app.post('/api/payments/razorpay/webhook', express.raw({ type: 'application/json', limit: '100kb' }), razorpayWebhook)
+  app.post(['/api/payments/razorpay/webhook','/api/payments/razorpay/webhook/:profileId'], express.raw({ type: 'application/json', limit: '100kb' }), razorpayWebhook)
   app.use(express.json({ limit: '100kb' }))
   app.use(cookieParser())
   app.use(session({
@@ -67,6 +70,7 @@ export function createReadyApp({ config = getConfig(), store, gateway, staticDir
   app.use('/api/admin-ready/security', requireCsrf, securityRoutes)
   app.use('/api/admin-ready', requireCsrf, readyRoutes)
   app.use('/api/admin/studio', requireCsrf, adminStudioRoutes)
+  app.use('/api/admin', requireCsrf, paymentAdminRoutes)
   app.use('/api/admin', requireCsrf, adminRoutes)
   app.use('/api/orders', requireCsrf, orderRoutes)
   app.use('/api/content', requireCsrf, contentRoutes)
