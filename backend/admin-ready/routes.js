@@ -17,19 +17,19 @@ async function audit(req,action,type,id,summary) {await AuditLog.create({actor:r
 router.get('/overview',async(req,res) => {
   const {days} = z.object({days:z.coerce.number().refine(n => [7,30,90].includes(n)).default(30)}).strict().parse(req.query)
   const {start,end,previousStart} = periods(days), range = {$gte:start,$lt:end}, before = {$gte:previousStart,$lt:start}
-  const sales = async createdAt => (await Order.aggregate([{$match:{createdAt,paymentStatus:'paid'}},{$group:{_id:null,total:{$sum:revenueExpression}}}]))[0]?.total || 0
+  const sales = async createdAt => (await Order.aggregate([{$match:{createdAt,paymentStatus:'paid',paymentEnvironment:'live'}},{$group:{_id:null,total:{$sum:revenueExpression}}}]))[0]?.total || 0
   const [revenue,previousRevenue,orders,previousOrders,customers,previousCustomers,lowStock,pendingReviews,toFulfill,recentOrders,bestSellers] = await Promise.all([
     sales(range),sales(before),Order.countDocuments({createdAt:range}),Order.countDocuments({createdAt:before}),User.countDocuments({role:'customer',createdAt:range}),User.countDocuments({role:'customer',createdAt:before}),
     ProductVariant.countDocuments({active:true,$expr:{$lte:[{$subtract:['$stockOnHand','$reservedQuantity']},LOW_STOCK]}}),Review.countDocuments({moderation:'pending'}),Order.countDocuments({fulfillmentStatus:'processing',inventoryStatus:'committed'}),
     Order.find({createdAt:range}).sort({createdAt:-1}).limit(5).select('orderNumber deliveryAddress.name totalPaise paymentStatus fulfillmentStatus createdAt').lean(),
-    Order.aggregate([{$match:{createdAt:range,paymentStatus:'paid',refundedPaise:0,fulfillmentStatus:{$ne:'cancelled'}}},{$unwind:'$items'},{$group:{_id:'$items.sku',name:{$first:'$items.name'},units:{$sum:'$items.quantity'}}},{$sort:{units:-1,_id:1}},{$limit:3}])
+    Order.aggregate([{$match:{createdAt:range,paymentStatus:'paid',paymentEnvironment:'live',refundedPaise:0,fulfillmentStatus:{$ne:'cancelled'}}},{$unwind:'$items'},{$group:{_id:'$items.sku',name:{$first:'$items.name'},units:{$sum:'$items.quantity'}}},{$sort:{units:-1,_id:1}},{$limit:3}])
   ])
   const catalog = await Product.find({sku:{$in:bestSellers.map(p=>p._id)}}).select('sku thumbnail').lean()
-  res.json({days,timezone:TIMEZONE,revenue,orders,customers,lowStock,pendingReviews,toFulfill,recentOrders,bestSellers:bestSellers.map(p=>({...p,thumbnail:catalog.find(c=>c.sku===p._id)?.thumbnail||''})),threshold:LOW_STOCK,paymentsConfigured:Boolean(req.app.locals.gateway.enabled),changes:{revenue:change(revenue,previousRevenue),orders:change(orders,previousOrders),customers:change(customers,previousCustomers)}})
+  res.json({days,timezone:TIMEZONE,revenue,orders,customers,lowStock,pendingReviews,toFulfill,recentOrders,bestSellers:bestSellers.map(p=>({...p,thumbnail:catalog.find(c=>c.sku===p._id)?.thumbnail||''})),threshold:LOW_STOCK,paymentsConfigured:(await req.app.locals.payments.publicConfig()).razorpayEnabled,changes:{revenue:change(revenue,previousRevenue),orders:change(orders,previousOrders),customers:change(customers,previousCustomers)}})
 })
 router.get('/readiness',async(req,res) => {
   const hello = await mongoose.connection.db.admin().command({hello:1})
-  res.json({databaseConnected:true,transactionsSupported:Boolean(hello.setName || hello.msg==='isdbgrid'),paymentsConfigured:Boolean(req.app.locals.gateway.enabled),googleEnabled:Boolean(req.app.locals.googleAuthEnabled),currency:'INR',timezone:TIMEZONE,lowStockThreshold:LOW_STOCK,discountCheckoutEnabled:false})
+  res.json({databaseConnected:true,transactionsSupported:Boolean(hello.setName || hello.msg==='isdbgrid'),paymentsConfigured:(await req.app.locals.payments.publicConfig()).razorpayEnabled,googleEnabled:Boolean(req.app.locals.googleAuthEnabled),currency:'INR',timezone:TIMEZONE,lowStockThreshold:LOW_STOCK,discountCheckoutEnabled:false})
 })
 router.get('/discounts',async(req,res) => {
   const {page,search:term,status} = pageInput.parse(req.query)
@@ -83,9 +83,9 @@ router.get('/orders/export',async(req,res)=>{
   const input=z.object({search:text(100).default(''),status:text(30).default(''),from:z.string().date().optional(),to:z.string().date().optional()}).strict().parse(req.query)
   const filter={...(input.status&&{fulfillmentStatus:input.status}),...(input.search&&{$or:['orderNumber','deliveryAddress.name'].map(k=>({[k]:{$regex:search(input.search),$options:'i'}}))})}
   if(input.from||input.to)filter.createdAt={...(input.from&&{$gte:new Date(`${input.from}T00:00:00+05:30`)}),...(input.to&&{$lt:new Date(new Date(`${input.to}T00:00:00+05:30`).getTime()+86400000)})}
-  const rows=await Order.find(filter).sort({createdAt:-1}).limit(5000).select('orderNumber deliveryAddress.name createdAt totalPaise paymentStatus fulfillmentStatus').lean()
+  const rows=await Order.find(filter).sort({createdAt:-1}).limit(5000).select('orderNumber deliveryAddress.name createdAt totalPaise paymentStatus fulfillmentStatus paymentEnvironment codCollectedPaise codRemittedPaise refundPendingPaise refundedPaise').lean()
   const cell=value=>'"'+String(value??'').replace(/^[=+@\-\t\r]/,"'$&").replaceAll('"','""')+'"'
-  const data=[['Order','Customer','Date','Total INR','Payment','Fulfillment'],...rows.map(o=>[o.orderNumber,o.deliveryAddress?.name,new Date(o.createdAt).toISOString(),(o.totalPaise/100).toFixed(2),o.paymentStatus,o.fulfillmentStatus])]
+  const data=[['Order','Customer','Date','Total INR','Payment','Fulfillment','Environment','COD Collected INR','COD Remitted INR','Refund Pending INR','Refund Processed INR'],...rows.map(o=>[o.orderNumber,o.deliveryAddress?.name,new Date(o.createdAt).toISOString(),(o.totalPaise/100).toFixed(2),o.paymentStatus,o.fulfillmentStatus,o.paymentEnvironment||'unknown',((o.codCollectedPaise||0)/100).toFixed(2),((o.codRemittedPaise||0)/100).toFixed(2),((o.refundPendingPaise||0)/100).toFixed(2),((o.refundedPaise||0)/100).toFixed(2)])]
   res.set({'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="aurelia-orders.csv"'}).send('\uFEFF'+data.map(row=>row.map(cell).join(',')).join('\r\n'))
 })
 export default router
