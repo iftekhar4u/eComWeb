@@ -15,7 +15,7 @@ const Draft=mongoose.models.AdminReadyDraft,restore=[]
 function mock(model,method,fn){const original=model[method];restore.push(()=>model[method]=original);model[method]=fn}
 const query=result=>{const chain={then:(resolve,reject)=>Promise.resolve(result).then(resolve,reject)};for(const name of ['select','sort','skip','limit','lean'])chain[name]=()=>chain;return chain}
 mock(User,'findById',()=>Promise.resolve(admin))
-const app=express();app.use(express.json());app.locals.gateway={enabled:false}
+const app=express();app.use(express.json());app.locals.gateway={enabled:false};app.locals.payments={publicConfig:async()=>({razorpayEnabled:false})}
 app.use((req,_res,next)=>{req.session={userId:String(adminId),sessionVersion:0,mfaVerified:req.get('x-test-pending')!=='true',csrfToken:'isolated-test-token'};next()})
 app.use('/api/admin-ready',requireCsrf,routes);app.use(errorHandler)
 const server=app.listen(0,'127.0.0.1');await new Promise((resolve,reject)=>{server.once('listening',resolve);server.once('error',reject)})
@@ -53,7 +53,7 @@ test('pending MFA and missing CSRF cannot write homepage drafts or discounts',as
 })
 test('dashboard returns real aggregate metrics and product images without graph data',async()=>{
  let sales=0,orders=0,customers=0
- mock(Order,'aggregate',async pipeline=>pipeline.some(p=>p.$unwind)?[{_id:'SKU-01',name:'Cleanser',units:15}]:[{total:++sales===1?900000:600000}])
+ mock(Order,'aggregate',async pipeline=>{assert.equal(pipeline[0].$match.paymentEnvironment,'live');return pipeline.some(p=>p.$unwind)?[{_id:'SKU-01',name:'Cleanser',units:15}]:[{total:++sales===1?900000:600000}]})
  mock(Order,'countDocuments',async filter=>filter.fulfillmentStatus?4:++orders===1?12:10)
  mock(User,'countDocuments',async()=>++customers===1?8:4)
  mock(ProductVariant,'countDocuments',async()=>3);mock(Review,'countDocuments',async()=>2)
