@@ -16,7 +16,7 @@ api.interceptors.response.use((response) => {
 }, async (error) => {
 	const config = error.config
 	const method = config?.method?.toLowerCase()
-	if (error.response?.status === 403 && config && ['post', 'put', 'patch', 'delete'].includes(method) && !config._csrfRetry) {
+	if (error.response?.status === 403 && error.response?.data?.message === 'Invalid CSRF token' && config && ['post', 'put', 'patch', 'delete'].includes(method) && !config._csrfRetry) {
 		config._csrfRetry = true
 		csrfToken = ''
 		const response = await api.get('/auth/csrf-token')

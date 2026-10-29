@@ -1,15 +1,18 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext } from 'react'
+import useSavedItems from './useSavedItems'
 const CartContext = createContext(null)
 export function CartProvider({ children }) {
-  const [cartItems, setCartItems] = useState(() => JSON.parse(localStorage.getItem('aurelia_cart') || '[]'))
-  useEffect(() => localStorage.setItem('aurelia_cart', JSON.stringify(cartItems)), [cartItems])
-  const addToCart = (product) => setCartItems((items) => { const found = items.find((item) => item.id === product.id); return found ? items.map((item) => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item) : [...items, { ...product, quantity: 1 }] })
-  const removeFromCart = (id) => setCartItems((items) => items.filter((item) => item.id !== id));
-  const increaseQuantity = (id) => setCartItems((items) => items.map((item) => item.id === id ? { ...item, quantity: item.quantity + 1 } : item))
-  const decreaseQuantity = (id) => setCartItems((items) => items.flatMap((item) => item.id === id ? (item.quantity > 1 ? [{ ...item, quantity: item.quantity - 1 }] : []) : [item]))
-  const clearCart = () => setCartItems([])
-  const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0)
-  const cartTotal = useMemo(() => cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0), [cartItems])
-  return <CartContext.Provider value={{ cartItems, cartCount, cartTotal, addToCart, removeFromCart, increaseQuantity, decreaseQuantity, clearCart }}>{children}</CartContext.Provider>
+  const { items: cartItems, update, error, loading, setError, flush, refresh } = useSavedItems('cart')
+  const addToCart = p => {
+    if (!p.variantId || p.stock < 1) { setError('This product is currently unavailable.'); return }
+    update(items => { const found = items.find(i => i.id === p.id); return found ? items.map(i => i.id === p.id ? { ...i, quantity: Math.min(99, p.stock, i.quantity + 1) } : i) : [...items, { ...p, quantity: 1 }] })
+  }
+  const removeFromCart = id => update(items => items.filter(i => i.id !== id))
+  const increaseQuantity = id => update(items => items.map(i => i.id === id ? { ...i, quantity: Math.min(99, i.stock, i.quantity + 1) } : i))
+  const decreaseQuantity = id => update(items => items.flatMap(i => i.id === id ? i.quantity > 1 ? [{ ...i, quantity: i.quantity - 1 }] : [] : [i]))
+  const clearCart = () => update(() => [])
+  const cartCount = cartItems.reduce((n, i) => n + i.quantity, 0)
+  const cartTotal = cartItems.reduce((n, i) => n + i.price * i.quantity, 0)
+  return <CartContext.Provider value={{ cartItems, cartCount, cartTotal, error, loading, addToCart, removeFromCart, increaseQuantity, decreaseQuantity, clearCart, flush, refreshCart: refresh }}>{children}</CartContext.Provider>
 }
-export const useCart = () => useContext(CartContext);
+export const useCart = () => useContext(CartContext)

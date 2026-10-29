@@ -1,0 +1,954 @@
+diff --git a/backend/admin-ready/tests/content-management.test.js b/backend/admin-ready/tests/content-management.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..76fcad7f7dbbdcf040a6e27d1bc19a936b4b754f
+--- /dev/null
++++ b/backend/admin-ready/tests/content-management.test.js
+@@ -0,0 +1,182 @@
++import test from 'node:test'
++import assert from 'node:assert/strict'
++import express from 'express'
++import mongoose from 'mongoose'
++import request from 'supertest'
++import User from '../../models/User.js'
++import { BlogPost, Page, AuditLog } from '../../models/domainModels.js'
++import adminRoutes from '../../routes/adminRoutes.js'
++import contentRoutes from '../../routes/contentRoutes.js'
++import { crawlRoutes } from '../../seo/routes.js'
++import { requireCsrf } from '../../middleware/csrfMiddleware.js'
++import { errorHandler } from '../../middleware/errorMiddleware.js'
++import { buildMetadata } from '../../../shared/seo.mjs'
++
++// Real Express handlers and Mongoose validation, with isolated collection
++// adapters. These tests never connect to Atlas or use environment credentials.
++const rows = new Map([[BlogPost, []], [Page, []], [AuditLog, []]])
++const restores = []
++const clone = value => value instanceof Date ? new Date(value) : value instanceof mongoose.Types.ObjectId ? new mongoose.Types.ObjectId(String(value)) : Array.isArray(value) ? value.map(clone) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, clone(entry)])) : value
++const equal = (a, b) => a instanceof Date || b instanceof Date ? +new Date(a) === +new Date(b) : String(a) === String(b)
++function matches(row, filter = {}) {
++  return Object.entries(filter).every(([key, value]) => {
++    if (value && typeof value === 'object' && '$regex' in value) return new RegExp(value.$regex, value.$options).test(row[key])
++    return equal(row[key], value)
++  })
++}
++function project(row, projection = {}) {
++  if (!row) return null
++  const included = Object.entries(projection).filter(([, value]) => value).map(([key]) => key)
++  const result = included.length ? Object.fromEntries(['_id', ...included].filter(key => row[key] !== undefined).map(key => [key, clone(row[key])])) : clone(row)
++  for (const [key, value] of Object.entries(projection)) if (!value) delete result[key]
++  return result
++}
++function patch(target, key, value) { const original = target[key]; restores.push(() => { target[key] = original }); target[key] = value }
++for (const [Model, records] of rows) {
++  function unique(record, previous) {
++    if (record.slug && records.some(row => row !== previous && row.slug === record.slug)) throw Object.assign(new Error('duplicate fixture slug'), { code: 11000 })
++  }
++  function update(filter, change) {
++    const row = records.find(value => matches(value, filter))
++    if (!row) return null
++    const next = { ...row, ...clone(change.$set) }
++    for (const [key, value] of Object.entries(change.$inc || {})) next[key] = (next[key] || 0) + value
++    unique(next, row); Object.assign(row, next)
++    return clone(row)
++  }
++  patch(Model.collection, 'insertOne', async record => { unique(record); records.push(clone(record)); return { acknowledged: true, insertedId: record._id } })
++  patch(Model.collection, 'findOne', async (filter, options = {}) => project(records.find(row => matches(row, filter)), options.projection))
++  patch(Model.collection, 'find', (filter = {}, options = {}) => ({ toArray: async () => {
++    const selected = records.filter(row => matches(row, filter)).sort((a, b) => {
++      for (const [key, direction] of Object.entries(options.sort || {})) {
++        if (a[key] > b[key]) return direction
++        if (a[key] < b[key]) return -direction
++      }
++      return 0
++    })
++    return selected.slice(options.skip || 0, options.limit ? (options.skip || 0) + options.limit : undefined).map(row => project(row, options.projection))
++  } }))
++  patch(Model.collection, 'countDocuments', async filter => records.filter(row => matches(row, filter)).length)
++  patch(Model.collection, 'findOneAndUpdate', async (filter, change) => update(filter, change))
++  patch(Model.collection, 'updateOne', async (filter, change) => ({ acknowledged: true, modifiedCount: update(filter, change) ? 1 : 0 }))
++}
++const adminId = new mongoose.Types.ObjectId()
++patch(User, 'findById', async id => ({ _id: adminId, role: id === 'customer' ? 'customer' : 'admin', status: 'active', sessionVersion: 0 }))
++const app = express()
++app.locals.config = { NODE_ENV: 'test' }
++app.use(express.json())
++app.use((req, _res, next) => {
++  req.session = { ...(req.get('x-auth') !== 'none' && { userId: req.get('x-auth') === 'customer' ? 'customer' : String(adminId) }), sessionVersion: 0, csrfToken: 'content-test-token', mfaVerified: req.get('x-mfa') !== 'pending' }
++  next()
++})
++app.use('/api/admin', requireCsrf, adminRoutes)
++app.use('/api/content', contentRoutes)
++app.use(crawlRoutes)
++app.use(errorHandler)
++const server = app.listen(0, '127.0.0.1')
++await new Promise(resolve => server.once('listening', resolve))
++const api = request(server)
++const input = { title: 'A simple care routine', slug: 'a-simple-care-routine', content: 'First paragraph.\n\nSecond paragraph.', excerpt: 'Everyday care.', image: '', status: 'draft', seo: {} }
++const createBlog = payload => api.post('/api/admin/blogs').set('x-csrf-token', 'content-test-token').send({ ...input, ...payload })
++test.beforeEach(() => { for (const records of rows.values()) records.length = 0 })
++test.after(async () => { await new Promise(resolve => server.close(resolve)); for (const restore of restores.reverse()) restore() })
++
++test('blog and About administration require login, administrator role, MFA and CSRF', async () => {
++  for (const path of ['/api/admin/blogs', '/api/admin/pages/by-slug/about']) {
++    assert.equal((await api.get(path).set('x-auth', 'none')).status, 401)
++    assert.equal((await api.get(path).set('x-auth', 'customer')).status, 403)
++    assert.equal((await api.get(path).set('x-mfa', 'pending')).status, 403)
++  }
++  assert.equal((await api.post('/api/admin/blogs').send(input)).status, 403)
++  assert.equal((await api.post('/api/admin/pages').send({ title: 'About', slug: 'about', content: 'Story', status: 'published' })).status, 403)
++  assert.equal(rows.get(BlogPost).length, 0)
++  assert.equal(rows.get(Page).length, 0)
++})
++
++test('a new blog persists as a hidden draft, publishes, edits and archives', async () => {
++  const created = await createBlog()
++  assert.equal(created.status, 200, JSON.stringify(created.body))
++  assert.equal(rows.get(BlogPost).length, 1)
++  assert.equal(created.body.item.status, 'draft')
++  assert.equal((await api.get(`/api/content/blogs/${input.slug}`)).status, 404)
++  const id = created.body.item._id
++  const published = await api.put(`/api/admin/blogs/${id}`).set('x-csrf-token', 'content-test-token').send({ ...input, status: 'published', updatedAt: created.body.item.updatedAt })
++  assert.equal(published.status, 200, JSON.stringify(published.body))
++  const firstPublishedAt = published.body.item.publishedAt
++  assert.ok(firstPublishedAt)
++  const publicPost = await api.get(`/api/content/blogs/${input.slug}`)
++  assert.equal(publicPost.status, 200)
++  assert.equal(publicPost.body.content, input.content)
++  assert.equal(publicPost.body.author, undefined)
++  const edited = await api.put(`/api/admin/blogs/${id}`).set('x-csrf-token', 'content-test-token').send({ ...input, content: 'Updated story', status: 'published', updatedAt: published.body.item.updatedAt })
++  assert.equal(edited.status, 200, JSON.stringify(edited.body))
++  assert.equal(edited.body.item.publishedAt, firstPublishedAt)
++  assert.equal((await api.delete(`/api/admin/blogs/${id}`).set('x-csrf-token', 'content-test-token')).status, 200)
++  assert.equal((await api.get(`/api/content/blogs/${input.slug}`)).status, 404)
++  assert.equal(rows.get(BlogPost).length, 1, 'archive retains the stored article')
++})
++
++test('duplicate slugs, unsafe images and malformed content fail without extra records', async () => {
++  assert.equal((await createBlog()).status, 200)
++  assert.equal((await createBlog()).status, 409)
++  for (const change of [{ slug: 'Invalid slug!' }, { image: 'javascript:alert(1)' }, { content: '' }, { unexpected: true }]) {
++    assert.equal((await createBlog({ ...change })).status, 400)
++  }
++  assert.equal(rows.get(BlogPost).length, 1)
++})
++
++test('stale editors cannot overwrite a blog or its SEO metadata', async () => {
++  const created = await createBlog()
++  const response = await api.put(`/api/admin/blogs/${created.body.item._id}`).set('x-csrf-token', 'content-test-token').send({ ...input, content: 'Overwrite attempt', updatedAt: '2000-01-01T00:00:00.000Z' })
++  assert.equal(response.status, 409)
++  assert.equal(rows.get(BlogPost)[0].content, input.content)
++})
++
++test('admin blog search treats regex characters literally and filters status', async () => {
++  await createBlog({ title: 'A+B guide', slug: 'a-plus-b', status: 'published' })
++  await createBlog({ title: 'AAB guide', slug: 'aab', status: 'published' })
++  await createBlog({ title: 'A+B draft', slug: 'a-plus-b-draft' })
++  const result = await api.get('/api/admin/blogs').query({ search: 'A+B', status: 'published' })
++  assert.equal(result.status, 200)
++  assert.equal(result.body.total, 1)
++  assert.equal(result.body.items[0].slug, 'a-plus-b')
++})
++
++test('public journal pagination includes only published articles', async () => {
++  for (let i = 0; i < 13; i += 1) await createBlog({ slug: `article-${i}`, status: 'published' })
++  await createBlog({ slug: 'private-draft' })
++  await createBlog({ slug: 'archived-article', status: 'archived' })
++  const first = await api.get('/api/content/blogs?page=1')
++  const second = await api.get('/api/content/blogs?page=2')
++  assert.equal(first.body.total, 13)
++  assert.equal(first.body.pages, 2)
++  assert.equal(first.body.items.length, 12)
++  assert.equal(second.body.items.length, 1)
++  assert.equal(new Set([...first.body.items, ...second.body.items].map(row => row._id)).size, 13)
++  assert.equal((await api.get('/api/content/blogs?page=-1')).status, 400)
++  const metadata = buildMetadata({ path: '/blog', search: '?page=2', origin: 'https://shop.example' })
++  assert.equal(metadata.canonical, 'https://shop.example/blog?page=2')
++})
++
++test('About content uses the existing pages collection and obeys publishing visibility', async () => {
++  const empty = await api.get('/api/admin/pages/by-slug/about')
++  assert.equal(empty.status, 200)
++  assert.equal(empty.body.item, null)
++  assert.equal(rows.get(Page).length, 0, 'opening the editor does not write or seed data')
++  const body = { title: 'About our store', slug: 'about', content: 'Our story.\n\nContact us for help.', status: 'published', seo: { title: 'Our story | AURELIA' } }
++  const saved = await api.post('/api/admin/pages').set('x-csrf-token', 'content-test-token').send(body)
++  assert.equal(saved.status, 200, JSON.stringify(saved.body))
++  assert.equal(rows.get(Page).length, 1)
++  const publicPage = await api.get('/api/content/pages/about')
++  assert.equal(publicPage.status, 200)
++  assert.equal(publicPage.body.content, body.content)
++  const adminPage = await api.get('/api/admin/pages/by-slug/about')
++  assert.equal(adminPage.body.item._id, saved.body.item._id)
++  assert.equal((await api.post('/api/admin/pages').set('x-csrf-token', 'content-test-token').send(body)).status, 409)
++  const hidden = await api.put(`/api/admin/pages/${saved.body.item._id}`).set('x-csrf-token', 'content-test-token').send({ ...body, status: 'draft', updatedAt: saved.body.item.updatedAt })
++  assert.equal(hidden.status, 200)
++  assert.equal((await api.get('/api/content/pages/about')).status, 404)
++  const redirect = await api.get('/about')
++  assert.equal(redirect.status, 301)
++  assert.equal(redirect.headers.location, '/pages/about')
++})
+diff --git a/backend/routes/adminRoutes.js b/backend/routes/adminRoutes.js
+index d63e7f0d3743a65e5da107e3d52cc018c353c58c..5d2ebfefc809d9c0be91399939be56cd2e1693e6 100644
+--- a/backend/routes/adminRoutes.js
++++ b/backend/routes/adminRoutes.js
+@@ -16,7 +16,7 @@ const status = z.enum(['draft', 'published', 'archived'])
+ const pagination = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), search: text(100).default('') }).strict()
+ const productInput = z.object({ seo: seoInput.optional(), name: text(160).min(2), slug, description: text(10000), shortDescription: text(500).default(''), category: slug, gender: z.enum(['women', 'men', 'unisex']), price: money.min(100), compareAtPrice: money.optional(), stock: z.number().int().min(0).max(100000000), sku: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/), thumbnail: imageUrl, images: z.array(imageUrl).max(12).default([]), benefits: z.array(text(500)).max(50).default([]), status, bestSeller: z.boolean(), newArrival: z.boolean(), featured: z.boolean().default(false), version: z.number().int().optional() }).strict().refine(p => !p.compareAtPrice || p.compareAtPrice >= p.price, 'Original price must be at least selling price')
+ const categoryInput = z.object({ seo: seoInput.optional(), name: text(100).min(2), slug, description: text(1000).default(''), image: imageUrl, order: z.number().int().min(0).max(100000), active: z.boolean() }).strict()
+-const articleInput = z.object({ seo: seoInput.optional(), title: text(200).min(2), slug, content: text(50000).min(1), status, excerpt: text(1000).optional(), image: imageUrl.optional() }).strict()
++const articleInput = z.object({ seo: seoInput.optional(), title: text(200).min(2), slug, content: text(50000).min(1), status, excerpt: text(1000).optional(), image: imageUrl.optional(), updatedAt: z.string().datetime().optional() }).strict()
+ const collectionInput = z.object({ seo: seoInput.optional(), name: text(120).min(2), slug, description: text(1000), products: z.array(objectId).max(500), status, order: z.number().int().min(0).max(100000) }).strict()
+ const resources = { categories: [Category, categoryInput], blogs: [BlogPost, articleInput], pages: [Page, articleInput.omit({ excerpt: true, image: true })], collections: [ProductCollection, collectionInput] }
+ async function audit(req, action, type, id) { await AuditLog.create({ actor: req.user._id, action, resourceType: type, resourceId: String(id), summary: `${action} ${type}` }) }
+@@ -97,16 +97,50 @@ for (const [resource, Model] of [['subscribers', Subscriber], ['messages', Conta
+   router.get(`/${resource}`, async (req, res) => { const { page } = pagination.parse(req.query); const total = await Model.countDocuments(); res.json({ items: await Model.find().sort({ createdAt: -1 }).skip((page - 1) * 20).limit(20).lean(), page, total, pages: Math.ceil(total / 20) }) })
+ }
+ router.patch('/messages/:id', async (req, res) => { await ContactMessage.updateOne({ _id: objectId.parse(req.params.id) }, { $set: { status: 'read' } }); res.json({ message: 'Marked as read' }) })
++router.get('/pages/by-slug/:slug', async (req, res) => {
++  const item = await Page.findOne({ slug: slug.parse(req.params.slug) }).lean()
++  res.set('Cache-Control', 'no-store').json({ item })
++})
+ for (const [resource, [Model, schema]] of Object.entries(resources)) {
+-  router.get(`/${resource}`, async (req, res) => { const { page } = pagination.parse(req.query); const total = await Model.countDocuments(); res.json({ items: await Model.find().sort({ updatedAt: -1 }).skip((page - 1) * 20).limit(20).lean(), page, total, pages: Math.ceil(total / 20) }) })
++  const isArticle = ['blogs', 'pages'].includes(resource)
++  router.get(`/${resource}`, async (req, res) => {
++    const input = (isArticle ? pagination.extend({ status: z.union([status, z.literal('')]).default('') }) : pagination).parse(req.query)
++    const filter = isArticle ? {
++      ...(input.status && { status: input.status }),
++      ...(input.search && { title: { $regex: input.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }),
++    } : {}
++    const [items, total] = await Promise.all([
++      Model.find(filter).sort({ updatedAt: -1, _id: -1 }).skip((input.page - 1) * 20).limit(20).lean(),
++      Model.countDocuments(filter),
++    ])
++    res.set('Cache-Control', 'no-store').json({ items, page: input.page, total, pages: Math.ceil(total / 20) })
++  })
+   const save = async (req, res) => {
+     const input = schema.parse(req.body)
+-    if (['blogs', 'pages'].includes(resource)) { input.author = req.user._id; if (input.status === 'published') input.publishedAt = new Date() }
++    const updatedAt = input.updatedAt
++    if (isArticle) {
++      delete input.updatedAt
++      const previous = req.params.id ? await Model.findById(objectId.parse(req.params.id)).select('publishedAt').lean() : null
++      if (req.params.id && !previous) throw fail(404, 'Entry not found')
++      input.author = req.user._id
++      if (input.status === 'published' && !previous?.publishedAt) input.publishedAt = new Date()
++    }
+     if (resource === 'categories' && req.params.id) {
+       const old = await Category.findById(objectId.parse(req.params.id))
+       if (old && old.slug !== input.slug && await Product.exists({ category: old.slug })) throw fail(409, 'This category has products. Keep its slug or move the products first.')
+     }
+-    const item = req.params.id ? await Model.findByIdAndUpdate(objectId.parse(req.params.id), { $set: input }, { new: true, runValidators: true }) : await Model.create(input)
++    let item
++    try {
++      item = req.params.id
++        ? isArticle && updatedAt
++          ? await Model.findOneAndUpdate({ _id: objectId.parse(req.params.id), updatedAt: new Date(updatedAt) }, { $set: input }, { new: true, runValidators: true })
++          : await Model.findByIdAndUpdate(objectId.parse(req.params.id), { $set: input }, { new: true, runValidators: true })
++        : await Model.create(input)
++    } catch (error) {
++      if (isArticle && error.code === 11000) throw fail(409, 'This page address is already in use. Choose another slug, or edit the existing entry.')
++      throw error
++    }
++    if (!item && isArticle && updatedAt) throw fail(409, 'This content changed. Reload it before saving again.')
+     if (!item) throw fail(404, 'Entry not found'); await audit(req, 'save', resource, item._id); res.json({ item })
+   }
+   router.post(`/${resource}`, save); router.put(`/${resource}/:id`, save)
+diff --git a/backend/routes/contentRoutes.js b/backend/routes/contentRoutes.js
+index 437bc3285825bded5fee4508fe987bcd45bff927..e6e2bf920d0dcd3da962ffe5d28d1f3631c67e63 100644
+--- a/backend/routes/contentRoutes.js
++++ b/backend/routes/contentRoutes.js
+@@ -21,6 +21,15 @@ router.get('/storefront', async (_req, res) => {
+   ])
+   res.json({ categories, settings, sections: homepage?.sections.filter(s => s.visible).sort((a,b) => a.order - b.order) || [], blogs, collections })
+ })
++router.get('/blogs', async (req, res) => {
++  const { page } = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1) }).strict().parse(req.query)
++  const filter = { status: 'published' }
++  const [items, total] = await Promise.all([
++    BlogPost.find(filter).sort({ publishedAt: -1, _id: -1 }).skip((page - 1) * 12).limit(12).select('title slug excerpt image seo').lean(),
++    BlogPost.countDocuments(filter),
++  ])
++  res.json({ items, total, page, pages: Math.ceil(total / 12) })
++})
+ router.get('/blogs/:slug', async (req, res) => { const post = await BlogPost.findOne({ slug: req.params.slug, status: 'published' }).select('title slug excerpt image content seo').lean(); if (!post) throw fail(404, 'Article not found'); res.json(post) })
+ router.get('/pages/:slug', async (req, res) => { const page = await Page.findOne({ slug: req.params.slug, status: 'published' }).select('title slug content seo').lean(); if (!page) throw fail(404, 'Page not found'); res.json(page) })
+ router.get('/collections/:slug', async (req, res) => { const collection = await ProductCollection.findOne({ slug: req.params.slug, status: 'published' }).lean(); if (!collection) throw fail(404, 'Collection not found'); res.json({ collection, products: await findPublicProducts(collection.products) }) })
+diff --git a/backend/seo/routes.js b/backend/seo/routes.js
+index b6e5d7a06fc53ca4ffec51444b889b98b8231be6..81b390a3c0370ad6a62f00a82a4a00e43c449025 100644
+--- a/backend/seo/routes.js
++++ b/backend/seo/routes.js
+@@ -66,6 +66,7 @@ adminSeoRoutes.put('/:resource/:id', async (req,res) => {
+ })
+ 
+ export const crawlRoutes = Router()
++crawlRoutes.get('/about', (_req, res) => res.redirect(301, '/pages/about'))
+ crawlRoutes.get('/robots.txt', async (req,res) => {
+   const settings = await SiteSettings.findOne({key:'site'}).select('seoSettings').lean() || {}
+   res.type('text/plain').set('Cache-Control','no-cache').send(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /__dev/\nSitemap: ${siteOrigin(settings,req.app.locals.clientUrl)}/sitemap.xml\n`)
+diff --git a/docs/BLOGS_ABOUT_SETUP.md b/docs/BLOGS_ABOUT_SETUP.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a1d73600dab8c0187aab792f69a51407edc90853
+--- /dev/null
++++ b/docs/BLOGS_ABOUT_SETUP.md
+@@ -0,0 +1,141 @@
++# About page and blog publishing
++
++This update adds an editable About page and exposes blog creation in the existing Admin Studio. It uses the existing `Page` and `BlogPost` models. No new dependency, database migration, setup reset or seed command is required for these features.
++
++## Apply the update
++
++Use **one** of these options.
++
++### Existing Git project: apply the included patch
++
++Copy only `Aurelia-blogs-about.patch` from this archive into your existing `InternProject` root. Stop the running frontend and backend with Ctrl+C, then run from that root:
++
++```bash
++git status --short
++git apply --check Aurelia-blogs-about.patch
++```
++
++If the check succeeds, apply it:
++
++```bash
++git apply Aurelia-blogs-about.patch
++npm run test:admin
++npm --prefix frontend run build
++```
++
++If the check fails, do not force it: the target files may have changed since the supplied ZIP or the update may already be applied. Compare the affected files before merging. The patch contains the source changes, tests and this guide; it does not change credentials or dependency lockfiles.
++
++### Use the complete updated source
++
++Extract this ZIP into a separate folder. Its source files already contain the update: **do not apply the patch again**. Dependencies, generated builds and Git history are omitted from the ZIP. Install the existing lockfiles:
++
++```bash
++npm run install:all
++```
++
++Existing configuration files from the supplied ZIP are preserved. If your current local settings have changed since that ZIP, retain your current settings when merging into the project.
++
++### Start the application
++
++From the project root, start the backend:
++
++```bash
++npm --prefix backend run dev
++```
++
++Open another terminal in the project root and start the frontend:
++
++```bash
++npm --prefix frontend run dev
++```
++
++The existing backend should still report its database connection and ready message. Open `http://localhost:5173/admin` and sign in using your existing administrator account. Complete MFA if your current configuration requires it.
++
++## Publish your About page
++
++1. Open **Admin → About page** (`/admin/about`).
++2. If an `about` page already exists, its saved title, content, publishing status and SEO fields load into the editor. Otherwise, editable starter text is shown. Opening this editor does not write a record.
++3. Edit **Name / title** and **Content**. Separate paragraphs with a blank line. Review the starter copy and replace it with your own store story.
++4. The page address stays `about` so navigation continues to work.
++5. Use **Preview content** to check your text. SEO and sharing fields are optional.
++6. Select **published** under **Publishing status**, then click **Save changes**.
++7. Open **View About page** or `http://localhost:5173/pages/about`.
++
++The page appears in desktop navigation, the mobile menu and the footer. `/about` redirects to `/pages/about`; the existing page SEO and sitemap handling use `/pages/about`.
++
++The page uses the storefront's existing colors and typography, with a brand monogram and links to Shop and Contact. Its title, story text, publishing status and SEO fields are editable; the decorative layout and CTA labels are part of the frontend code.
++
++Save as **draft** or **archived** to hide the content from visitors. Until a page is published, the public URL shows that the page is unavailable. Updates are stored through the existing admin API in the `pages` collection. Refresh an already-open visitor tab to see newly saved content.
++
++## Create a new blog
++
++1. Open **Admin → Blogs** (`/admin/blogs`) and click **New blog**.
++2. Enter the title and click **Generate page address from name**, or enter a unique lowercase slug such as `summer-care-guide`.
++3. Add the optional **Short introduction** and article image. You can enter an HTTPS image URL or use the existing **Upload image to Cloudinary** control after configuring Cloudinary in Admin Settings. Uploads accept JPEG, PNG, WebP or GIF up to 5 MB.
++4. Write **Content** and preview it. Content is plain text with paragraph breaks; HTML is displayed as text, not executed. An image is optional.
++5. Choose **draft** to save privately, or **published** to show the article immediately. Click **Save changes**.
++6. Open `/blog` or `/blog/your-slug` to check the published article.
++
++The Blogs screen supports title search, status filters, pagination, editing, archiving and restoring. **Archive** hides an article without deleting its stored record. To restore it, choose **Edit / restore**, select **published** and save. The public journal displays 12 published articles per page. Drafts and archived posts are not returned by the public content endpoints.
++
++Saved articles use the `blog_posts` collection. The editor sends the last saved timestamp on updates; if another editor changed the record, it asks you to reload instead of silently overwriting that version. Keep published slugs stable because changing a blog slug changes its public URL.
++
++## Verify with your database
++
++1. Save a draft blog and confirm it is absent from `/blog`.
++2. Publish it, open the article, refresh, and confirm its content remains available.
++3. Publish the About page, reopen `/admin/about`, and confirm your saved content loads.
++4. In your existing MongoDB database, check `pages` for `{ "slug": "about" }` and `blog_posts` for your article slug. Confirm their `status`, `content` and `updatedAt` values.
++5. Change a record back to draft and confirm the public URL no longer exposes its content.
++
++Local automated checks use isolated data and browser API fixtures. They do not connect to your Atlas database or verify a real Cloudinary upload. Your configured database must be reachable for real saves.
++
++## Changed files
++
++`A` means added and `M` means modified, relative to the latest supplied ZIP. No existing source file is deleted.
++
++```text
++A backend/admin-ready/tests/content-management.test.js
++A frontend/src/admin-ready/ContentManagement.jsx
++A frontend/src/pages/About.jsx
++A frontend/src/content.css
++A frontend/tests/e2e/content.spec.js
++A docs/BLOGS_ABOUT_SETUP.md
++
++M backend/routes/adminRoutes.js
++M backend/routes/contentRoutes.js
++M backend/seo/routes.js
++M frontend/src/App.jsx
++M frontend/src/components/Layout.jsx
++M frontend/src/admin-ready/ReadyAdmin.jsx
++M frontend/src/admin-ready/ExistingEditors.jsx
++M frontend/src/pages/BlogPages.jsx
++M frontend/tests/serve-production.mjs
++M shared/seo.mjs
++```
++
++`Aurelia-blogs-about.patch` is also included as a delivery file. It is not included inside its own patch.
++
++The earlier request-IP fix, Nodemailer update, payment implementation and unrelated source files are retained. Package manifests, lockfiles and existing configuration files are unchanged.
++
++## Automated checks
++
++Validation completed for this update: **78/78 backend tests passed**, **4/4 content browser tests passed**, lint completed with no errors, and the production frontend build succeeded. About layout checks cover 1280, 1024, 768 and 390 pixel widths. Existing lint warnings and the large-bundle build warning remain.
++
++Run from the project root:
++
++```bash
++node --test backend/admin-ready/tests/*.test.js backend/email/tests/*.test.js backend/seo/tests/*.test.js
++npm --prefix frontend run lint
++npm --prefix frontend run build
++```
++
++For the four content browser tests, use a separate terminal:
++
++```bash
++cd frontend
++npx playwright install chromium
++npm run test:browser -- content.spec.js
++```
++
++The browser tests use the production app and a local fixture server on port 5300, with mocked API responses. The backend tests exercise the real Express handlers and Mongoose validation with isolated collection adapters, including login/role/MFA/CSRF enforcement, duplicate slugs, publication visibility and stale-editor conflicts.
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index d35e69c55fa498ce5987091093f1f423ca5ac988..0e0c4831f422e0a5a04d46f5d64c2a4037253311 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -1,4 +1,4 @@
+-import { BrowserRouter, Routes, Route } from 'react-router-dom'
++import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+ import { HelmetProvider } from 'react-helmet-async'
+ import { StoreProvider } from './context/StoreContext'
+ import { AuthProvider } from './context/AuthContext'
+@@ -14,6 +14,7 @@ import Admin from './admin-ready/ReadyAdmin'
+ import { Contact, Collections, Collection, ContentPage } from './pages/ContentPages'
+ import ForgotPassword from './pages/ForgotPassword'
+ import Home from './pages/Home'
++import About from './pages/About'
+ import CategoryProducts from './pages/CategoryProducts'
+ import ProductDetails from './pages/ProductDetails'
+ import { BlogArticle, BlogIndex } from './pages/BlogPages'
+@@ -25,7 +26,8 @@ import './responsive-home.css'
+ import './auth-overrides.css'
+ import './profile.css'
+ import './commerce.css'
++import './content.css'
+ 
+ export default function App() {
+-  return <HelmetProvider><AuthProvider><StoreProvider><CartProvider><WishlistProvider><BrowserRouter><ScrollToTop /><SiteSeo /><Routes><Route path="/admin/*" element={<Admin />} /><Route path="/login" element={<Login />} /><Route path="/signup" element={<Signup />} /><Route path="/forgot-password" element={<ForgotPassword />} /><Route element={<Layout />}><Route path="/" element={<Home />} /><Route path="/shop" element={<Shop />} /><Route path="/blog" element={<BlogIndex />} /><Route path="/blog/:slug" element={<BlogArticle />} /><Route path="/category/:category" element={<CategoryProducts />} /><Route path="/product/:slug" element={<ProductDetails />} /><Route path="/wishlist" element={<Wishlist />} /><Route path="/cart" element={<Cart />} /><Route path="/checkout" element={<Checkout />} /><Route path="/orders" element={<Orders />} /><Route path="/orders/:id" element={<Orders />} /><Route path="/contact" element={<Contact />} /><Route path="/collections" element={<Collections />} /><Route path="/collections/:slug" element={<Collection />} /><Route path="/pages/:slug" element={<ContentPage />} /><Route path="/profile" element={<Profile />} />{import.meta.env.DEV && <Route path="/__dev/profile-preview" element={<ProfilePreview />} />}<Route path="*" element={<NotFound />} /></Route></Routes></BrowserRouter></WishlistProvider></CartProvider></StoreProvider></AuthProvider></HelmetProvider>
++  return <HelmetProvider><AuthProvider><StoreProvider><CartProvider><WishlistProvider><BrowserRouter><ScrollToTop /><SiteSeo /><Routes><Route path="/admin/*" element={<Admin />} /><Route path="/login" element={<Login />} /><Route path="/signup" element={<Signup />} /><Route path="/forgot-password" element={<ForgotPassword />} /><Route element={<Layout />}><Route path="/" element={<Home />} /><Route path="/shop" element={<Shop />} /><Route path="/blog" element={<BlogIndex />} /><Route path="/blog/:slug" element={<BlogArticle />} /><Route path="/category/:category" element={<CategoryProducts />} /><Route path="/product/:slug" element={<ProductDetails />} /><Route path="/wishlist" element={<Wishlist />} /><Route path="/cart" element={<Cart />} /><Route path="/checkout" element={<Checkout />} /><Route path="/orders" element={<Orders />} /><Route path="/orders/:id" element={<Orders />} /><Route path="/contact" element={<Contact />} /><Route path="/collections" element={<Collections />} /><Route path="/collections/:slug" element={<Collection />} /><Route path="/about" element={<Navigate to="/pages/about" replace />} /><Route path="/pages/about" element={<About />} /><Route path="/pages/:slug" element={<ContentPage />} /><Route path="/profile" element={<Profile />} />{import.meta.env.DEV && <Route path="/__dev/profile-preview" element={<ProfilePreview />} />}<Route path="*" element={<NotFound />} /></Route></Routes></BrowserRouter></WishlistProvider></CartProvider></StoreProvider></AuthProvider></HelmetProvider>
+ }
+diff --git a/frontend/src/admin-ready/ContentManagement.jsx b/frontend/src/admin-ready/ContentManagement.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c46c32dae113566a45fe4a891a17da8aec5b71b9
+--- /dev/null
++++ b/frontend/src/admin-ready/ContentManagement.jsx
+@@ -0,0 +1,104 @@
++import { useState } from 'react'
++import { Link, useSearchParams } from 'react-router-dom'
++import { FiPlus } from 'react-icons/fi'
++import { useStore } from '../context/StoreContext'
++import { RecordEditor } from './ExistingEditors'
++import { api, useStudio, date, message } from './studioApi'
++
++function State({ state }) {
++  if (state.loading) return <p className="studio-state" role="status">Loading content…</p>
++  if (state.error) return <p className="studio-error" role="alert">{state.error} <button onClick={state.reload}>Retry</button></p>
++  return null
++}
++
++function Blogs() {
++  const [params, setParams] = useSearchParams()
++  const page = Math.min(10000, Math.max(1, Number.parseInt(params.get('page'), 10) || 1))
++  const search = params.get('search') || ''
++  const status = ['draft', 'published', 'archived'].includes(params.get('status')) ? params.get('status') : ''
++  const state = useStudio(`/admin/blogs?${new URLSearchParams({ page: String(page), search, status })}`)
++  const { reload: refreshStore } = useStore()
++  const [editing, setEditing] = useState(null)
++  const [busy, setBusy] = useState(false)
++  const [error, setError] = useState('')
++  const [notice, setNotice] = useState('')
++  const isNew = params.get('new') === '1'
++
++  function update(values) {
++    setParams(previous => {
++      const next = new URLSearchParams(previous)
++      next.delete('page')
++      for (const [key, value] of Object.entries(values)) {
++        if (value) next.set(key, value)
++        else next.delete(key)
++      }
++      return next
++    })
++  }
++  function closeEditor() { setEditing(null); update({ new: '' }) }
++  function saved(item) {
++    closeEditor(); state.reload(); refreshStore(); setError('')
++    setNotice(item.status === 'published' ? 'Blog published. It is now visible in your journal.' : item.status === 'archived' ? 'Blog archived.' : 'Blog saved as a draft. It is not visible to visitors.')
++  }
++  async function archive(item) {
++    if (busy || !window.confirm(`Archive “${item.title}”? It will be hidden from the website.`)) return
++    setBusy(true); setError(''); setNotice('')
++    try {
++      await api.delete(`/admin/blogs/${item._id}`)
++      state.reload(); refreshStore(); setNotice('Blog archived. Use Edit / restore to publish it again.')
++    } catch (error) { setError(message(error)) }
++    finally { setBusy(false) }
++  }
++
++  if (editing || isNew) return <>
++    <div className="studio-heading"><div><h1>{isNew ? 'New blog' : 'Edit blog'}</h1><p>Write, preview and choose when your article is visible.</p></div></div>
++    <RecordEditor key={editing?._id || 'new-blog'} resource="blogs" initial={editing || {}} onCancel={closeEditor} onSaved={saved}/>
++  </>
++  return <>
++    <div className="studio-heading"><div><h1>Blogs</h1><p>Manage the articles in your store journal.</p></div><div className="studio-actions"><Link to="/blog">View journal ↗</Link><button className="studio-primary" onClick={() => { setNotice(''); update({ new: '1' }) }}><FiPlus/> New blog</button></div></div>
++    {notice && <p role="status">{notice}</p>}
++    {error && <p className="studio-error" role="alert">{error}</p>}
++    <section className="studio-card">
++      <form className="studio-filters" onSubmit={event => { event.preventDefault(); update({ search: new FormData(event.currentTarget).get('search').trim() }) }}>
++        <label>Search blogs<input key={search} name="search" defaultValue={search} maxLength={100} placeholder="Search by title…"/></label>
++        <button>Search</button>
++        <label>Publishing status<select value={status} onChange={event => update({ status: event.target.value })}><option value="">All statuses</option>{['draft', 'published', 'archived'].map(value => <option key={value}>{value}</option>)}</select></label>
++      </form>
++      <State state={state}/>
++      {state.data && <>
++        <div className="studio-table-wrap"><table><thead><tr><th>Article</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody>{state.data.items.map(item => <tr key={item._id}>
++          <td><strong>{item.title}</strong><small>/blog/{item.slug}</small></td>
++          <td><span className={`studio-badge ${item.status === 'published' ? 'good' : 'waiting'}`}>{item.status}</span></td>
++          <td>{date(item.updatedAt)}</td>
++          <td><div className="admin-actions"><button disabled={busy} onClick={() => setEditing(item)}>Edit / restore</button>{item.status === 'published' && <Link to={`/blog/${item.slug}`}>View</Link>}{item.status !== 'archived' && <button disabled={busy} onClick={() => archive(item)}>Archive</button>}</div></td>
++        </tr>)}</tbody></table></div>
++        {!state.data.items.length && <p className="studio-state">No blogs match this view. Create a new blog or change the filters.</p>}
++        <div className="studio-pager"><span>{state.data.total} blogs · Page {page} of {Math.max(1, state.data.pages)}</span><button disabled={page <= 1} onClick={() => update({ page: String(page - 1) })}>Previous</button><button disabled={page >= state.data.pages} onClick={() => update({ page: String(page + 1) })}>Next</button></div>
++      </>}
++    </section>
++  </>
++}
++
++function AboutEditor() {
++  const state = useStudio('/admin/pages/by-slug/about')
++  const { settings, reload: refreshStore } = useStore()
++  const [notice, setNotice] = useState('')
++  const brand = settings.brandName || 'AURELIA'
++  const starter = {
++    title: `About ${brand}`, slug: 'about', status: 'draft',
++    content: `${brand} is a space to explore beauty and everyday care, at your own pace.\n\nBrowse our collections, discover ideas in our journal, and find the products that fit your routine.\n\nIf you have a question about a product or an order, our team is here to help. Visit our Contact page to get in touch.`,
++  }
++  return <>
++    <div className="studio-heading"><div><h1>About page</h1><p>Tell visitors about your store and update your story.</p></div>{state.data?.item?.status === 'published' && <Link to="/pages/about">View About page ↗</Link>}</div>
++    {notice && <p role="status">{notice}</p>}
++    <State state={state}/>
++    {state.data && <>
++      <div className="studio-notice">{state.data.item ? `Current status: ${state.data.item.status}.` : 'Review the starter text below and make it your own.'} Choose published and save to show this page to visitors. Draft and archived pages are hidden. The page address stays /pages/about.</div>
++      <RecordEditor key={state.data.item?.updatedAt || 'new-about'} resource="pages" initial={state.data.item || starter} fixedSlug="about" onCancel={() => { state.reload(); setNotice('Editor reloaded.') }} onSaved={item => { state.reload(); refreshStore(); setNotice(item.status === 'published' ? 'About page published.' : 'About page saved. It is hidden from visitors.') }}/>
++    </>}
++  </>
++}
++
++export default function ContentManagement({ section }) {
++  return section === 'about' ? <AboutEditor/> : <Blogs/>
++}
+diff --git a/frontend/src/admin-ready/ExistingEditors.jsx b/frontend/src/admin-ready/ExistingEditors.jsx
+index dcc5bdc1976e23e31a769b6b0d1c3c79241b029e..ca3ae15150d9deb3d1fc0b8f025df8c99a5f813a 100644
+--- a/frontend/src/admin-ready/ExistingEditors.jsx
++++ b/frontend/src/admin-ready/ExistingEditors.jsx
+@@ -10,29 +10,32 @@ const label = value => value[0].toUpperCase() + value.slice(1)
+ function ErrorNotice({error,retry}) { return <p role="alert" className="studio-error">{error} {retry && <button type="button" onClick={retry}>Retry</button>}</p> }
+ const splitLines = value => value.split('\n').map(s => s.trim()).filter(Boolean)
+ const cleanSlug = value => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+-export function RecordEditor({ resource, initial, onCancel, onSaved }) {
++export function RecordEditor({ resource, initial, onCancel, onSaved, fixedSlug }) {
+   const { categories } = useStore()
+   const { data: categoryData } = useApi(resource === 'products' ? '/admin/options/categories' : null)
+   const [productPage, setProductPage] = useState(1)
+   const { data: productData, loading: productsLoading } = useApi(resource === 'collections' ? `/admin/products?page=${productPage}` : null)
+   const isProduct = resource === 'products', isCategory = resource === 'categories', isCollection = resource === 'collections'
++  const isArticle = ['blogs', 'pages'].includes(resource)
++  const [preview, setPreview] = useState(false)
+   const defaults = isProduct ? { name: '', slug: '', sku: '', description: '', shortDescription: '', category: categories[0]?.slug || '', gender: 'unisex', price: '', compareAtPrice: '', stock: 0, thumbnail: '', images: '', benefits: '', status: 'draft', bestSeller: false, newArrival: false, featured: false } : isCategory ? { name: '', slug: '', description: '', image: '', order: 0, active: true } : isCollection ? { name: '', slug: '', description: '', products: [], order: 0, status: 'draft' } : { title: '', slug: '', excerpt: '', image: '', content: '', status: 'draft' }
+-  const [form, setForm] = useState(() => ({ ...defaults, ...initial, ...(isProduct && initial._id ? { price: (initial.inventory?.price ?? initial.discountPrice ?? initial.price) / 100, compareAtPrice: (initial.inventory?.compareAtPrice || (initial.discountPrice ? initial.price : 0)) / 100 || '', stock: initial.inventory?.stockOnHand ?? initial.stock, images: (initial.images || []).join('\n'), benefits: (initial.benefits || []).join('\n') } : {}) }))
++  const [form, setForm] = useState(() => ({ ...defaults, ...initial, ...(fixedSlug && { slug: fixedSlug }), ...(isProduct && initial._id ? { price: (initial.inventory?.price ?? initial.discountPrice ?? initial.price) / 100, compareAtPrice: (initial.inventory?.compareAtPrice || (initial.discountPrice ? initial.price : 0)) / 100 || '', stock: initial.inventory?.stockOnHand ?? initial.stock, images: (initial.images || []).join('\n'), benefits: (initial.benefits || []).join('\n') } : {}) }))
+   const [error, setError] = useState(''), [busy, setBusy] = useState(false)
+-  const set = (key, value) => setForm(f => ({ ...f, [key]: value }))
+-  const field = (key, title, type = 'text', required = false) => <label key={key}>{title}{type === 'textarea' ? <textarea value={form[key] ?? ''} onChange={e => set(key, e.target.value)} required={required} rows={key === 'content' ? 12 : 4} /> : <input type={type} value={form[key] ?? ''} onChange={e => set(key, e.target.value)} required={required} step={type === 'number' && ['price','compareAtPrice'].includes(key) ? '0.01' : undefined} min={type === 'number' ? 0 : undefined} />}</label>
++  const set = (key, value) => setForm(f => ({ ...f, [key]: key === 'slug' && fixedSlug ? fixedSlug : value }))
++  const field = (key, title, type = 'text', required = false) => <label key={key}>{title}{type === 'textarea' ? <textarea value={form[key] ?? ''} onChange={e => set(key, e.target.value)} required={required} maxLength={isArticle ? { content: 50000, excerpt: 1000 }[key] : undefined} rows={key === 'content' ? 12 : 4} /> : <input type={type} value={form[key] ?? ''} onChange={e => set(key, e.target.value)} required={required} readOnly={key === 'slug' && Boolean(fixedSlug)} maxLength={isArticle ? { title: 200, slug: 120, image: 2048 }[key] : undefined} pattern={key === 'slug' ? '[a-z0-9]+(-[a-z0-9]+)*' : undefined} step={type === 'number' && ['price','compareAtPrice'].includes(key) ? '0.01' : undefined} min={type === 'number' ? 0 : undefined} />}</label>
+   async function save(e) {
+-    e.preventDefault(); setBusy(true); setError('')
++    e.preventDefault(); if (busy) return; setBusy(true); setError('')
+     let payload
+     if (isProduct && (!Number.isFinite(Number(form.price)) || Number(form.price) < 1 || !Number.isInteger(Number(form.stock)) || Number(form.stock) < 0)) { setError('Enter a price of at least ₹1 and a whole non-negative stock quantity.'); setBusy(false); return }
+     if (isProduct) payload = { ...Object.fromEntries(['name','slug','sku','description','shortDescription','category','gender','thumbnail','status','bestSeller','newArrival','featured'].map(k => [k, form[k]])), price: Math.round(Number(form.price) * 100), ...(form.compareAtPrice !== '' && { compareAtPrice: Math.round(Number(form.compareAtPrice) * 100) }), stock: Number(form.stock), images: splitLines(form.images), benefits: splitLines(form.benefits), ...(initial._id && { version: initial.__v }) }
+     else if (isCategory) payload = { name: form.name, slug: form.slug, description: form.description, image: form.image, order: Number(form.order), active: form.active }
+     else if (isCollection) payload = { name: form.name, slug: form.slug, description: form.description, order: Number(form.order), status: form.status, products: form.products }
+     else payload = { title: form.title, slug: form.slug, content: form.content, status: form.status, ...(resource === 'blogs' && { excerpt: form.excerpt, image: form.image }) }
++    if (isArticle && initial._id && initial.updatedAt) payload.updatedAt = initial.updatedAt
+     payload.seo = form.seo || {}
+-    try { await api[initial._id ? 'put' : 'post'](`/admin/${resource}${initial._id ? `/${initial._id}` : ''}`, payload); onSaved() } catch(e) { setError(e.response?.data?.message || 'Unable to save entry.') } finally { setBusy(false) }
++    try { const { data } = await api[initial._id ? 'put' : 'post'](`/admin/${resource}${initial._id ? `/${initial._id}` : ''}`, payload); onSaved(data.item) } catch(e) { setError(e.response?.data?.message || 'Unable to save entry.') } finally { setBusy(false) }
+   }
+-  return <section className="admin-panel"><h2>{initial._id ? 'Edit' : 'Add'} {isProduct ? 'product' : isCategory ? 'category' : isCollection ? 'collection' : 'content'}</h2><form className="admin-form" onSubmit={save}><div className="admin-form-grid">{field(isProduct || isCategory || isCollection ? 'name' : 'title', 'Name / title', 'text', true)}{field('slug', 'Page address (slug)', 'text', true)}</div><button type="button" className="remove-button" onClick={() => set('slug', cleanSlug(form.name || form.title))}>Generate page address from name</button>{isProduct ? <><div className="admin-form-grid">{field('sku','SKU','text',true)}<label>Category<select value={form.category} onChange={e => set('category',e.target.value)} required><option value="">Select category</option>{(categoryData?.items || categories).map(c => <option value={c.slug} key={c.slug}>{c.name}</option>)}</select></label><label>Audience<select value={form.gender} onChange={e => set('gender',e.target.value)}>{['unisex','women','men'].map(g => <option key={g}>{g}</option>)}</select></label>{field('price','Selling price (Rs.)','number',true)}{field('compareAtPrice','Original price (Rs., optional)','number')}{field('stock','Stock on hand','number',true)}</div>{field('shortDescription','Short description')}{field('description','Description','textarea')}{field('thumbnail','Main image HTTPS URL','url',true)}<CloudinaryUpload disabled={busy} onUploaded={url=>set('thumbnail',url)}/>{form.thumbnail?.startsWith('https://') && <img className="studio-preview-image" src={form.thumbnail} alt="Product preview" />}{field('images','Gallery image HTTPS URLs (one per line)','textarea')}<CloudinaryUpload label="Add a gallery image from Cloudinary" disabled={busy || splitLines(form.images).length>=12} onUploaded={url=>setForm(f=>({...f,images:[f.images,url].filter(Boolean).join('\n')}))}/>{field('benefits','Highlights (one per line)','textarea')}<div className="admin-checks">{['bestSeller','newArrival','featured'].map(k => <label key={k}><input type="checkbox" checked={form[k]} onChange={e => set(k,e.target.checked)} />{k === 'bestSeller' ? 'Best seller' : k === 'newArrival' ? 'New arrival' : 'Featured'}</label>)}</div></> : isCategory ? <>{field('description','Description','textarea')}{field('image','Category image HTTPS URL','url')}<CloudinaryUpload disabled={busy} onUploaded={url=>set('image',url)}/>{field('order','Display order','number')}<label className="check-label"><input type="checkbox" checked={form.active} onChange={e => set('active',e.target.checked)} />Visible in store navigation</label></> : isCollection ? <>{field('description','Description','textarea')}{field('order','Display order','number')}<fieldset><legend>Products in this collection</legend>{productData?.items.map(p => <label className="check-label" key={p._id}><input type="checkbox" checked={form.products.includes(p._id)} onChange={e => set('products',e.target.checked ? [...form.products,p._id] : form.products.filter(id => id !== p._id))} />{p.name}</label>)}<small>{form.products.length} products selected</small><div className="admin-actions"><button type="button" disabled={productsLoading || productPage <= 1} onClick={() => setProductPage(p => p - 1)}>Previous products</button><span>Page {productPage} of {Math.max(1, productData?.pages || 1)}</span><button type="button" disabled={productsLoading || productPage >= (productData?.pages || 1)} onClick={() => setProductPage(p => p + 1)}>Next products</button></div></fieldset></> : <>{resource === 'blogs' && <>{field('excerpt','Short introduction','textarea')}{field('image','Article image HTTPS URL','url')}<CloudinaryUpload disabled={busy} onUploaded={url=>set('image',url)}/></>}{field('content','Content','textarea',true)}<small>Paragraphs are displayed as plain text to keep content safe.</small></>}{!isCategory && <label>Publishing status<select value={form.status} onChange={e => set('status',e.target.value)}>{['draft','published','archived'].map(s => <option key={s}>{s}</option>)}</select></label>}<SeoFields value={form.seo || {}} onChange={seo=>set('seo',seo)} title={form.name || form.title} description={form.shortDescription || form.excerpt || form.description || form.content} path={`${RESOURCE_PATHS[resource] || '/'}${form.slug || ''}`} image={form.thumbnail || form.image} gallery={isProduct}/>{error && <ErrorNotice error={error} />}<div className="admin-actions"><button type="submit" className="button button-dark" disabled={busy}>{busy ? 'Saving...' : 'Save changes'}</button><button type="button" disabled={busy} onClick={onCancel}>Cancel</button></div></form></section>
++  return <section className="admin-panel"><h2>{initial._id ? 'Edit' : 'Add'} {isProduct ? 'product' : isCategory ? 'category' : isCollection ? 'collection' : resource === 'blogs' ? 'blog' : 'page'}</h2><form className="admin-form" onSubmit={save}><div className="admin-form-grid">{field(isProduct || isCategory || isCollection ? 'name' : 'title', 'Name / title', 'text', true)}{field('slug', 'Page address (slug)', 'text', true)}</div>{!fixedSlug && <button type="button" className="remove-button" onClick={() => set('slug', cleanSlug(form.name || form.title))}>Generate page address from name</button>}{isProduct ? <><div className="admin-form-grid">{field('sku','SKU','text',true)}<label>Category<select value={form.category} onChange={e => set('category',e.target.value)} required><option value="">Select category</option>{(categoryData?.items || categories).map(c => <option value={c.slug} key={c.slug}>{c.name}</option>)}</select></label><label>Audience<select value={form.gender} onChange={e => set('gender',e.target.value)}>{['unisex','women','men'].map(g => <option key={g}>{g}</option>)}</select></label>{field('price','Selling price (Rs.)','number',true)}{field('compareAtPrice','Original price (Rs., optional)','number')}{field('stock','Stock on hand','number',true)}</div>{field('shortDescription','Short description')}{field('description','Description','textarea')}{field('thumbnail','Main image HTTPS URL','url',true)}<CloudinaryUpload disabled={busy} onUploaded={url=>set('thumbnail',url)}/>{form.thumbnail?.startsWith('https://') && <img className="studio-preview-image" src={form.thumbnail} alt="Product preview" />}{field('images','Gallery image HTTPS URLs (one per line)','textarea')}<CloudinaryUpload label="Add a gallery image from Cloudinary" disabled={busy || splitLines(form.images).length>=12} onUploaded={url=>setForm(f=>({...f,images:[f.images,url].filter(Boolean).join('\n')}))}/>{field('benefits','Highlights (one per line)','textarea')}<div className="admin-checks">{['bestSeller','newArrival','featured'].map(k => <label key={k}><input type="checkbox" checked={form[k]} onChange={e => set(k,e.target.checked)} />{k === 'bestSeller' ? 'Best seller' : k === 'newArrival' ? 'New arrival' : 'Featured'}</label>)}</div></> : isCategory ? <>{field('description','Description','textarea')}{field('image','Category image HTTPS URL','url')}<CloudinaryUpload disabled={busy} onUploaded={url=>set('image',url)}/>{field('order','Display order','number')}<label className="check-label"><input type="checkbox" checked={form.active} onChange={e => set('active',e.target.checked)} />Visible in store navigation</label></> : isCollection ? <>{field('description','Description','textarea')}{field('order','Display order','number')}<fieldset><legend>Products in this collection</legend>{productData?.items.map(p => <label className="check-label" key={p._id}><input type="checkbox" checked={form.products.includes(p._id)} onChange={e => set('products',e.target.checked ? [...form.products,p._id] : form.products.filter(id => id !== p._id))} />{p.name}</label>)}<small>{form.products.length} products selected</small><div className="admin-actions"><button type="button" disabled={productsLoading || productPage <= 1} onClick={() => setProductPage(p => p - 1)}>Previous products</button><span>Page {productPage} of {Math.max(1, productData?.pages || 1)}</span><button type="button" disabled={productsLoading || productPage >= (productData?.pages || 1)} onClick={() => setProductPage(p => p + 1)}>Next products</button></div></fieldset></> : <>{resource === 'blogs' && <>{field('excerpt','Short introduction','textarea')}{field('image','Article image HTTPS URL','url')}<CloudinaryUpload disabled={busy} onUploaded={url=>set('image',url)}/></>}{field('content','Content','textarea',true)}<small>Paragraphs are displayed as plain text to keep content safe.</small></>}{!isCategory && <label>Publishing status<select value={form.status} onChange={e => set('status',e.target.value)}>{['draft','published','archived'].map(s => <option key={s}>{s}</option>)}</select></label>}{isArticle && <><button type="button" onClick={() => setPreview(!preview)}>{preview ? 'Close preview' : 'Preview content'}</button>{preview && <article className="content-editor-preview" aria-label="Content preview">{form.image?.startsWith('https://') && <img src={form.image} alt={form.seo?.imageAlt || ''}/>}<h2>{form.title || 'Your title'}</h2>{form.excerpt && <p>{form.excerpt}</p>}<div className="content-prose">{form.content || 'Your content will appear here.'}</div></article>}</>}<SeoFields value={form.seo || {}} onChange={seo=>set('seo',seo)} title={form.name || form.title} description={form.shortDescription || form.excerpt || form.description || form.content} path={`${RESOURCE_PATHS[resource] || '/'}${form.slug || ''}`} image={form.thumbnail || form.image} gallery={isProduct}/>{error && <ErrorNotice error={error} />}<div className="admin-actions"><button type="submit" className="button button-dark" disabled={busy}>{busy ? 'Saving...' : 'Save changes'}</button><button type="button" disabled={busy} onClick={onCancel}>Cancel</button></div></form></section>
+ }
+ export function ContentSettings({ tab }) {
+   const { data, error, loading, reload } = useApi('/admin/settings'), { reload: refreshStore } = useStore()
+diff --git a/frontend/src/admin-ready/ReadyAdmin.jsx b/frontend/src/admin-ready/ReadyAdmin.jsx
+index 402f1c97ca4292b760441f1e843dc4a1824d6ec4..53c12f820b8f56280bdb82566e1d7aeff417ce48 100644
+--- a/frontend/src/admin-ready/ReadyAdmin.jsx
++++ b/frontend/src/admin-ready/ReadyAdmin.jsx
+@@ -9,10 +9,11 @@ import {AdminLogin,AdminMfa} from './AdminAccess'
+ import {Discounts,StorefrontEditor,ReadySettings} from './Management'
+ import './studio.css'
+ import SeoAdmin from './SeoAdmin'
++const ContentManagement = lazy(() => import('./ContentManagement'))
+ const PaymentSettings = lazy(() => import('./PaymentSettings'))
+ const OrderPaymentActions = lazy(() => import('./OrderPaymentActions'))
+ const EmailAdmin = lazy(() => import('./EmailAdmin'))
+-const navigation=[['dashboard','Dashboard',FiHome],['products','Products',FiTag],['categories','Categories',FiGrid],['inventory','Inventory',FiBox],['orders','Orders',FiShoppingBag],['customers','Customers',FiUsers],['discounts','Discounts',FiPercent],['storefront','Storefront',FiMonitor],['reviews','Reviews',FiStar],['payments','Payments',FiShoppingBag],['settings','Settings',FiSettings],['seo','SEO',FiSearch],['email','Email',FiMail]]
++const navigation=[['dashboard','Dashboard',FiHome],['products','Products',FiTag],['categories','Categories',FiGrid],['inventory','Inventory',FiBox],['orders','Orders',FiShoppingBag],['customers','Customers',FiUsers],['discounts','Discounts',FiPercent],['storefront','Storefront',FiMonitor],['blogs','Blogs',FiMail],['about','About page',FiMonitor],['reviews','Reviews',FiStar],['payments','Payments',FiShoppingBag],['settings','Settings',FiSettings],['seo','SEO',FiSearch],['email','Email',FiMail]]
+ const titleOf=key=>navigation.find(n=>n[0]===key)?.[1] || 'Dashboard'
+ export function Notice({children}) {return <div className="studio-notice">{children}</div>}
+ function State({state}) {return state.loading?<p role="status" className="studio-state">Loading store data…</p>:state.error?<div className="studio-error" role="alert">{state.error} <button onClick={state.reload}>Retry</button> <Link to="/admin">Sign in</Link></div>:null}
+@@ -38,7 +39,7 @@ function StudioShell(){
+   useEffect(()=>{setDrawer(false)},[location.pathname,location.search])
+   useEffect(()=>{const el=drawerRef.current;if(drawer&&!el.open)el.showModal();else if(!drawer&&el.open)el.close()},[drawer])
+   const nav=<><Link to="/" className="studio-brand">AURELIA<small>ADMIN STUDIO</small></Link><nav aria-label="Administration">{navigation.map(([key,label,Icon])=><NavLink key={key} to={key==='dashboard'?'/admin':`/admin/${key}`} end className={({isActive})=>isActive?'selected':''}><Icon/>{label}</NavLink>)}</nav><div className="studio-sidebar-footer"><span className="studio-avatar">{initials}</span><div><strong>{user.name}</strong><small>Administrator</small></div><Link to="/admin/settings" aria-label="Administrator profile">›</Link></div></>
+-  return <div className="aurelia-studio"><aside className="studio-sidebar">{nav}</aside><dialog className="studio-drawer" ref={drawerRef} onClose={()=>{setDrawer(false);menuRef.current?.focus()}}><button className="studio-close" onClick={()=>setDrawer(false)} aria-label="Close navigation"><FiX/></button>{nav}</dialog><div className="studio-workspace"><header className="studio-topbar"><button className="studio-mobile-menu" ref={menuRef} aria-label="Open navigation" aria-expanded={drawer} onClick={()=>setDrawer(true)}><FiMenu/></button><div className="studio-breadcrumb">Store <span>/</span> <strong>{section==='dashboard'?'Overview':titleOf(section)}</strong></div><form className="studio-global-search" onSubmit={e=>{e.preventDefault();navigate(`/admin/${searchType}?search=${encodeURIComponent(search)}`)}}><FiSearch/><select aria-label="Search type" value={searchType} onChange={e=>setSearchType(e.target.value)}><option value="products">Products</option><option value="orders">Orders</option></select><input aria-label={`Search ${searchType}`} placeholder={`Search ${searchType}…`} value={search} onChange={e=>setSearch(e.target.value)} maxLength={100}/><button>Search</button></form><Link to="/admin/orders?status=processing" className="studio-icon-link" aria-label="Orders needing attention"><FiBell/></Link><details className="studio-profile"><summary><span className="studio-avatar">{initials}</span><span className="studio-profile-name">{user.name}</span></summary><div><Link to="/admin/settings">My profile</Link><Link to="/admin/orders">Search orders</Link><Link to="/">View store ↗</Link><button onClick={async()=>{try{await logout()}catch(e){setError(message(e))}}}>Sign out</button></div></details></header><main className="studio-main" id="studio-content">{error&&<p role="alert">{error}</p>}{section==='dashboard'?<Dashboard/>:section==='storefront'?<StorefrontEditor/>:section==='payments'?<Suspense fallback={<p>Loading payments…</p>}><PaymentSettings/></Suspense>:section==='email'?<Suspense fallback={<p role="status" className="studio-state">Loading email settings…</p>}><EmailAdmin/></Suspense>:section==='seo'?<SeoAdmin/>:section==='settings'?<ReadySettings/>:section==='discounts'?<Discounts/>:navigation.some(n=>n[0]===section)?<Resource key={section} resource={section}/>:<><Heading title="Page not found"/><Link to="/admin">Return to dashboard</Link></>}</main></div></div>
++  return <div className="aurelia-studio"><aside className="studio-sidebar">{nav}</aside><dialog className="studio-drawer" ref={drawerRef} onClose={()=>{setDrawer(false);menuRef.current?.focus()}}><button className="studio-close" onClick={()=>setDrawer(false)} aria-label="Close navigation"><FiX/></button>{nav}</dialog><div className="studio-workspace"><header className="studio-topbar"><button className="studio-mobile-menu" ref={menuRef} aria-label="Open navigation" aria-expanded={drawer} onClick={()=>setDrawer(true)}><FiMenu/></button><div className="studio-breadcrumb">Store <span>/</span> <strong>{section==='dashboard'?'Overview':titleOf(section)}</strong></div><form className="studio-global-search" onSubmit={e=>{e.preventDefault();navigate(`/admin/${searchType}?search=${encodeURIComponent(search)}`)}}><FiSearch/><select aria-label="Search type" value={searchType} onChange={e=>setSearchType(e.target.value)}><option value="products">Products</option><option value="orders">Orders</option></select><input aria-label={`Search ${searchType}`} placeholder={`Search ${searchType}…`} value={search} onChange={e=>setSearch(e.target.value)} maxLength={100}/><button>Search</button></form><Link to="/admin/orders?status=processing" className="studio-icon-link" aria-label="Orders needing attention"><FiBell/></Link><details className="studio-profile"><summary><span className="studio-avatar">{initials}</span><span className="studio-profile-name">{user.name}</span></summary><div><Link to="/admin/settings">My profile</Link><Link to="/admin/orders">Search orders</Link><Link to="/">View store ↗</Link><button onClick={async()=>{try{await logout()}catch(e){setError(message(e))}}}>Sign out</button></div></details></header><main className="studio-main" id="studio-content">{error&&<p role="alert">{error}</p>}{section==='dashboard'?<Dashboard/>:section==='storefront'?<StorefrontEditor/>:['blogs','about'].includes(section)?<Suspense fallback={<p role="status">Loading content…</p>}><ContentManagement key={section} section={section}/></Suspense>:section==='payments'?<Suspense fallback={<p>Loading payments…</p>}><PaymentSettings/></Suspense>:section==='email'?<Suspense fallback={<p role="status" className="studio-state">Loading email settings…</p>}><EmailAdmin/></Suspense>:section==='seo'?<SeoAdmin/>:section==='settings'?<ReadySettings/>:section==='discounts'?<Discounts/>:navigation.some(n=>n[0]===section)?<Resource key={section} resource={section}/>:<><Heading title="Page not found"/><Link to="/admin">Return to dashboard</Link></>}</main></div></div>
+ }
+ function Heading({title,subtitle,children}){return <div className="studio-heading"><div><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div><div className="studio-actions">{children}</div></div>}
+ function Dashboard(){
+diff --git a/frontend/src/components/Layout.jsx b/frontend/src/components/Layout.jsx
+index e2213fb2d94a87bedf912b16e8303fa847cd4d8d..08a6ac690eab2b16a42cf13d1cc0e2968daecdfb 100644
+--- a/frontend/src/components/Layout.jsx
++++ b/frontend/src/components/Layout.jsx
+@@ -51,8 +51,8 @@ export default function Layout({ children }) {
+               </Link>
+             ))}
+             <Link to="/collections">Collections</Link>
+-            {/* <Link to="/shop">Offers</Link>
+-            <Link to="/shop">Blog</Link> */}
++            <Link to="/blog">Blog</Link>
++            <Link to="/pages/about">About</Link>
+           </nav>
+           <div className="nav-actions">
+             <form className="search-box desktop-search" onSubmit={e => { e.preventDefault(); navigate(`/shop?search=${encodeURIComponent(query)}`); }}>
+@@ -82,7 +82,7 @@ export default function Layout({ children }) {
+       </header>
+       <Offcanvas show={open} onHide={() => setOpen(false)} placement="start" className="mobile-drawer">
+           <Offcanvas.Header closeButton><Offcanvas.Title>AURELIA</Offcanvas.Title></Offcanvas.Header>
+-          <Offcanvas.Body><form onSubmit={e => { e.preventDefault(); navigate(`/shop?search=${encodeURIComponent(query)}`); setOpen(false); }}><input aria-label="Search products on mobile" placeholder="Search essentials" value={query} onChange={e => setQuery(e.target.value)} /><button type="submit">Search</button></form><Link to="/" onClick={() => setOpen(false)}>Home</Link>{links.map((link) => <Link to={`/category/${link.slug}`} onClick={() => setOpen(false)} key={link.slug}>{link.label}</Link>)}<Link to="/collections" onClick={() => setOpen(false)}>Collections</Link><Link to="/shop" onClick={() => setOpen(false)}>Offers</Link><Link to="/blog" onClick={() => setOpen(false)}>Blog</Link></Offcanvas.Body>
++          <Offcanvas.Body><form onSubmit={e => { e.preventDefault(); navigate(`/shop?search=${encodeURIComponent(query)}`); setOpen(false); }}><input aria-label="Search products on mobile" placeholder="Search essentials" value={query} onChange={e => setQuery(e.target.value)} /><button type="submit">Search</button></form><Link to="/" onClick={() => setOpen(false)}>Home</Link>{links.map((link) => <Link to={`/category/${link.slug}`} onClick={() => setOpen(false)} key={link.slug}>{link.label}</Link>)}<Link to="/collections" onClick={() => setOpen(false)}>Collections</Link><Link to="/shop" onClick={() => setOpen(false)}>Offers</Link><Link to="/blog" onClick={() => setOpen(false)}>Blog</Link><Link to="/pages/about" onClick={() => setOpen(false)}>About</Link></Offcanvas.Body>
+         </Offcanvas>
+       {error && <div className="store-status" role="alert">{error} <button onClick={reload}>Try again</button></div>}
+       {loading && <div className="store-status" role="status">Loading your beauty essentials...</div>}
+@@ -115,6 +115,7 @@ export default function Layout({ children }) {
+           <Link to="/shop">Shop all</Link>
+           <Link to="/collections">Collections</Link>
+           <Link to="/blog">Our journal</Link>
++          <Link to="/pages/about">About us</Link>
+         </div>
+         <div>
+           <p className="footer-label">Care</p>
+diff --git a/frontend/src/content.css b/frontend/src/content.css
+new file mode 100644
+index 0000000000000000000000000000000000000000..50882e781a556b4c918dfc289a0a62c8d4aa5786
+--- /dev/null
++++ b/frontend/src/content.css
+@@ -0,0 +1,25 @@
++.about-page { padding: clamp(32px, 6vw, 80px) clamp(20px, 4vw, 56px) 90px; }
++.about-heading { border-bottom: 1px solid var(--line); padding-bottom: 38px; }
++.about-heading h1 { max-width: 900px; font-size: clamp(2.5rem, 6vw, 5.5rem); font-weight: 400; line-height: 1.08; margin: 20px 0 0; overflow-wrap: anywhere; }
++.about-story { display: grid; grid-template-columns: minmax(200px, .8fr) minmax(0, 1.4fr); gap: clamp(28px, 6vw, 90px); align-items: start; padding: 55px 0; }
++.about-mark { aspect-ratio: 4 / 5; background: var(--rose); display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--ink); }
++.about-mark > span { font-family: Georgia, serif; font-size: clamp(130px, 20vw, 270px); font-weight: 400; line-height: 1; }
++.about-mark small { padding: 15px; letter-spacing: .16em; text-align: center; overflow-wrap: anywhere; max-width: 100%; }
++.about-copy p { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.9; color: var(--muted); margin: 0 0 24px; }
++.about-copy .about-intro { font-size: clamp(1.2rem, 2vw, 1.6rem); color: var(--ink); line-height: 1.65; }
++.about-footer { border-top: 1px solid var(--line); padding-top: 38px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 24px; }
++.about-footer h2 { font-size: clamp(1.8rem, 3vw, 2.6rem); font-weight: 400; margin: 8px 0; }
++.about-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 22px; }
++.about-actions .button { display: inline-flex; align-items: center; gap: 14px; }
++.journal-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 24px; margin: 40px 0 65px; }
++.journal-pagination a { text-decoration: underline; text-underline-offset: 4px; }
++.blog-image-placeholder { display: grid; place-items: center; min-height: 220px; background: var(--rose); color: var(--ink); font-family: Georgia, serif; font-size: 6rem; }
++.content-editor-preview { padding: 24px; border: 1px solid #e2e6ea; background: #fffdf9; overflow-wrap: anywhere; }
++.content-editor-preview img { display: block; max-height: 300px; width: 100%; object-fit: cover; margin-bottom: 20px; }
++.content-editor-preview .content-prose { white-space: pre-wrap; }
++@media (max-width: 650px) {
++  .about-story { grid-template-columns: 1fr; padding: 30px 0; }
++  .about-mark { aspect-ratio: 16 / 9; }
++  .about-mark > span { font-size: 120px; }
++  .about-page { padding-bottom: 55px; }
++}
+diff --git a/frontend/src/pages/About.jsx b/frontend/src/pages/About.jsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..13b81776c27b104eb33c1aec69014aa9f5ff8ce4
+--- /dev/null
++++ b/frontend/src/pages/About.jsx
+@@ -0,0 +1,22 @@
++import { Link } from 'react-router-dom'
++import { FiArrowRight } from 'react-icons/fi'
++import { useStore } from '../context/StoreContext'
++import useApi from '../hooks/useApi'
++
++export default function About() {
++  const { settings } = useStore()
++  const { data, loading, error, reload } = useApi('/content/pages/about')
++  const brand = settings.brandName || 'AURELIA'
++  if (loading) return <main className="page-shell about-page"><p role="status">Loading our story…</p></main>
++  if (error) return <main className="page-shell about-page"><p className="eyebrow">Our story</p><h1>About {brand}</h1><p role="alert">{error === 'Page not found' ? 'Our About page is not available right now.' : error}</p><div className="about-actions"><button className="button button-dark" onClick={reload}>Try again</button><Link className="text-link" to="/contact">Contact us <FiArrowRight/></Link></div></main>
++  if (!data) return null
++  const paragraphs = data.content.split(/\r?\n\s*\r?\n/).filter(value => value.trim())
++  return <main className="page-shell about-page">
++    <header className="about-heading"><p className="eyebrow">Our story</p><h1>{data.title}</h1></header>
++    <section className="about-story" aria-label="Our story">
++      <div className="about-mark" aria-hidden="true"><span>{brand.slice(0, 1)}</span><small>{brand}</small></div>
++      <div className="about-copy">{paragraphs.map((paragraph, index) => <p className={index === 0 ? 'about-intro' : ''} key={index}>{paragraph}</p>)}</div>
++    </section>
++    <div className="about-footer"><div><p className="eyebrow">Continue exploring</p><h2>Find your everyday ritual.</h2></div><div className="about-actions"><Link className="button button-dark" to="/shop">Explore the collection <FiArrowRight/></Link><Link className="text-link" to="/contact">Get in touch <FiArrowRight/></Link></div></div>
++  </main>
++}
+diff --git a/frontend/src/pages/BlogPages.jsx b/frontend/src/pages/BlogPages.jsx
+index 2626ae1812bf4233a76a1a91d70c5c5b57f80479..358a2615a19b938593189db910b255533bf62605 100644
+--- a/frontend/src/pages/BlogPages.jsx
++++ b/frontend/src/pages/BlogPages.jsx
+@@ -1,11 +1,19 @@
+-import { Link, useNavigate, useParams } from 'react-router-dom'
++import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+ import { FiArrowLeft, FiArrowRight } from 'react-icons/fi'
+-import { useStore } from '../context/StoreContext'
+ import useApi from '../hooks/useApi'
+ 
+ export function BlogIndex() {
+-  const { blogs } = useStore()
+-  return <><main className="page-shell blog-page"><div className="section-heading"><div><p className="eyebrow">From our journal</p><h1>Beauty tips & guides</h1></div><Link className="text-link" to="/">Back home <FiArrowLeft /></Link></div><div className="blog-grid">{blogs.map((blog) => <BlogCard blog={blog} key={blog.slug} />)}</div></main></>
++  const [params] = useSearchParams()
++  const page = Math.min(10000, Math.max(1, Number.parseInt(params.get('page'), 10) || 1))
++  const { data, loading, error, reload } = useApi(`/content/blogs?page=${page}`)
++  return <main className="page-shell blog-page">
++    <div className="section-heading"><div><p className="eyebrow">From our journal</p><h1>Beauty tips &amp; guides</h1></div><Link className="text-link" to="/">Back home <FiArrowLeft /></Link></div>
++    {loading ? <p role="status">Loading articles…</p> : error ? <p className="form-error" role="alert">{error} <button onClick={reload}>Try again</button></p> : data && <>
++      <div className="blog-grid">{data.items.map(blog => <BlogCard blog={blog} key={blog.slug}/>)}</div>
++      {!data.items.length && <p>No articles on this page yet. {page > 1 && <Link to="/blog">Return to the latest articles.</Link>}</p>}
++      {(data.pages > 1 || page > 1) && <nav className="journal-pagination" aria-label="Journal pages">{page > 1 && <Link to={page === 2 ? '/blog' : `/blog?page=${page - 1}`}>← Previous</Link>}<span>Page {page} of {Math.max(1, data.pages)}</span>{page < data.pages && <Link to={`/blog?page=${page + 1}`}>Next →</Link>}</nav>}
++    </>}
++  </main>
+ }
+ 
+ export function BlogCard({ blog, heading = 'h2' }) {
+@@ -24,7 +32,7 @@ export function BlogCard({ blog, heading = 'h2' }) {
+   }
+ 
+   const Heading = heading
+-  return <article className="blog-card" role="link" tabIndex="0" onClick={handleClick} onKeyDown={handleKeyDown}><img src={blog.image} alt={blog.seo?.imageAlt || ''} /><p className="eyebrow">Beauty guide</p><Heading>{blog.title}</Heading><p>{blog.excerpt}</p><Link to={destination} className="text-link">Read guide <FiArrowRight /></Link></article>
++  return <article className="blog-card" role="link" tabIndex="0" onClick={handleClick} onKeyDown={handleKeyDown}>{blog.image ? <img src={blog.image} alt={blog.seo?.imageAlt || ''} loading="lazy"/> : <div className="blog-image-placeholder" aria-hidden="true">A</div>}<p className="eyebrow">Beauty guide</p><Heading>{blog.title}</Heading><p>{blog.excerpt}</p><Link to={destination} className="text-link">Read guide <FiArrowRight /></Link></article>
+ }
+ 
+ export function BlogArticle() {
+@@ -33,5 +41,5 @@ export function BlogArticle() {
+   if (loading) return <main className="page-shell">Loading guide...</main>
+   if (error) return <main className="page-shell form-error">{error}</main>
+   if (!blog) return <main className="page-shell empty-state"><p className="eyebrow">404</p><h1>Guide not found.</h1><Link className="button button-dark" to="/blog">Back to the journal</Link></main>
+-  return <><main className="page-shell blog-article"><div className="blog-detail-header"><Link className="text-link" to="/blog"><FiArrowLeft /> Back to journal</Link><p className="eyebrow">Beauty guide</p><h1 className="blog-detail-title">{blog.title}</h1></div><img className="blog-hero-image" src={blog.image} alt={blog.seo?.imageAlt || blog.title} /><div className="blog-article-body"><p>{blog.content}</p></div></main></>
++  return <><main className="page-shell blog-article"><div className="blog-detail-header"><Link className="text-link" to="/blog"><FiArrowLeft /> Back to journal</Link><p className="eyebrow">Beauty guide</p><h1 className="blog-detail-title">{blog.title}</h1></div>{blog.image && <img className="blog-hero-image" src={blog.image} alt={blog.seo?.imageAlt || blog.title} />}<div className="blog-article-body"><p>{blog.content}</p></div></main></>
+ }
+\ No newline at end of file
+diff --git a/frontend/tests/e2e/content.spec.js b/frontend/tests/e2e/content.spec.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..221c38bac51f7832f47816788c663d59bad27bee
+--- /dev/null
++++ b/frontend/tests/e2e/content.spec.js
+@@ -0,0 +1,141 @@
++import { test, expect } from '@playwright/test'
++
++async function fixture(page, { admin = true } = {}) {
++  let revision = 0
++  const state = { blogs: [], about: null, writes: [] }
++  const stamp = () => new Date(Date.UTC(2026, 9, 24, 10, 0, ++revision)).toISOString()
++  await page.route('https://images.example.test/**', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="800" height="400" fill="#ead9d3"/></svg>' }))
++  await page.route('**/api/**', async route => {
++    const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method()
++    let data = {}, status = 200
++    const body = ['POST', 'PUT', 'PATCH'].includes(method) ? request.postDataJSON() : null
++    if (path === '/api/auth/session') {
++      if (admin) data = { user: { id: '111111111111111111111111', name: 'Content Admin', email: 'admin@example.test', role: 'admin', mfaEnabled: true }, mfaRequired: false }
++      else { status = 401; data = { message: 'Authentication required' } }
++    } else if (path === '/api/auth/csrf-token') data = { csrfToken: 'fixture-token' }
++    else if (path === '/api/auth/google/status') data = { enabled: false }
++    else if (path === '/api/cart' || path === '/api/wishlist') data = { items: [], version: 0 }
++    else if (path === '/api/integrations/whatsapp') data = { enabled: false }
++    else if (path === '/api/content/storefront') data = { categories: [{ name: 'Skincare', slug: 'skincare' }, { name: 'Haircare', slug: 'haircare' }, { name: 'Body care', slug: 'body-care' }], settings: { brandName: 'AURELIA' }, sections: [], collections: [], blogs: state.blogs.filter(item => item.status === 'published') }
++    else if (path.startsWith('/api/seo/')) data = { title: 'AURELIA', description: 'Store journal', robots: 'noindex, follow', canonical: url.origin, structuredData: [] }
++    else if (path === '/api/admin/blogs' && method === 'GET') {
++      const search = (url.searchParams.get('search') || '').toLowerCase(), statusFilter = url.searchParams.get('status')
++      const items = state.blogs.filter(item => (!statusFilter || item.status === statusFilter) && item.title.toLowerCase().includes(search))
++      data = { items, total: items.length, page: 1, pages: Math.ceil(items.length / 20) }
++    } else if (path === '/api/admin/blogs' && method === 'POST') {
++      state.writes.push(body)
++      const item = { ...body, _id: String(state.blogs.length + 1).padStart(24, '0'), updatedAt: stamp() }
++      state.blogs.push(item); data = { item }
++    } else if (path.startsWith('/api/admin/blogs/') && method === 'PUT') {
++      state.writes.push(body)
++      const index = state.blogs.findIndex(item => item._id === path.split('/').at(-1))
++      state.blogs[index] = { ...state.blogs[index], ...body, updatedAt: stamp() }; data = { item: state.blogs[index] }
++    } else if (path.startsWith('/api/admin/blogs/') && method === 'DELETE') {
++      state.blogs.find(item => item._id === path.split('/').at(-1)).status = 'archived'; data = { message: 'Entry archived' }
++    } else if (path === '/api/admin/pages/by-slug/about') data = { item: state.about }
++    else if ((path === '/api/admin/pages' && method === 'POST') || (path.startsWith('/api/admin/pages/') && method === 'PUT')) {
++      state.writes.push(body)
++      state.about = { ...body, _id: '222222222222222222222222', updatedAt: stamp() }; data = { item: state.about }
++    } else if (path === '/api/content/pages/about') {
++      if (state.about?.status === 'published') data = state.about
++      else { status = 404; data = { message: 'Page not found' } }
++    } else if (path === '/api/content/blogs') {
++      const all = state.blogs.filter(item => item.status === 'published'), pageNumber = Number(url.searchParams.get('page') || 1)
++      data = { items: all.slice((pageNumber - 1) * 12, pageNumber * 12), total: all.length, page: pageNumber, pages: Math.ceil(all.length / 12) }
++    } else if (path.startsWith('/api/content/blogs/')) {
++      const item = state.blogs.find(item => item.slug === path.split('/').at(-1) && item.status === 'published')
++      if (item) data = item
++      else { status = 404; data = { message: 'Article not found' } }
++    } else if (path === '/api/health') return route.continue()
++    else { status = 404; data = { message: 'Unexpected fixture endpoint' } }
++    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) })
++  })
++  return state
++}
++
++test('admin creates a draft, previews safe content, publishes, edits and archives a blog', async ({ page }) => {
++  const state = await fixture(page)
++  await page.goto('/admin/blogs')
++  await page.getByRole('button', { name: 'New blog', exact: true }).click()
++  await page.getByLabel('Name / title', { exact: true }).fill('My first beauty guide')
++  await page.getByRole('button', { name: 'Generate page address from name' }).click()
++  await expect(page.getByLabel('Page address (slug)')).toHaveValue('my-first-beauty-guide')
++  await page.getByLabel('Short introduction').fill('A simple guide to your routine.')
++  await page.getByLabel('Article image HTTPS URL').fill('https://images.example.test/guide.svg')
++  await page.getByRole('textbox', { name: 'Content', exact: true }).fill('First paragraph.\n\n<script>window.contentInjected=true</script>')
++  await page.getByRole('button', { name: 'Preview content' }).click()
++  await expect(page.getByRole('article', { name: 'Content preview' })).toContainText('<script>window.contentInjected=true</script>')
++  expect(await page.evaluate(() => window.contentInjected)).toBeUndefined()
++  await page.getByRole('button', { name: 'Save changes', exact: true }).click()
++  await expect(page.getByRole('status')).toContainText('Blog saved as a draft')
++  expect(state.blogs).toHaveLength(1)
++  await page.goto('/blog')
++  await expect(page.getByText('No articles on this page yet.', { exact: false })).toBeVisible()
++  await page.goto('/admin/blogs')
++  await page.getByRole('button', { name: 'Edit / restore' }).click()
++  await page.getByRole('combobox', { name: 'Publishing status', exact: true }).selectOption('published')
++  await page.getByRole('button', { name: 'Save changes', exact: true }).click()
++  await expect(page.getByRole('status')).toContainText('Blog published')
++  expect(state.writes.at(-1).updatedAt).toBeTruthy()
++  await page.getByRole('link', { name: 'View', exact: true }).click()
++  await expect(page.getByRole('heading', { name: 'My first beauty guide' })).toBeVisible()
++  expect(await page.evaluate(() => window.contentInjected)).toBeUndefined()
++  await page.goto('/admin/blogs')
++  page.once('dialog', dialog => dialog.accept())
++  await page.getByRole('button', { name: 'Archive', exact: true }).click()
++  await expect(page.getByRole('status')).toContainText('Blog archived')
++  expect(state.blogs[0].status).toBe('archived')
++  await page.goto('/blog/my-first-beauty-guide')
++  await expect(page.getByText('Article not found', { exact: true })).toBeVisible()
++})
++
++test('About editor publishes existing-page content, keeps its slug and supports mobile reading', async ({ page }) => {
++  const state = await fixture(page)
++  await page.goto('/admin/about')
++  await expect(page.getByLabel('Page address (slug)')).toHaveValue('about')
++  await expect(page.getByLabel('Page address (slug)')).toHaveAttribute('readonly', '')
++  await page.getByLabel('Name / title', { exact: true }).fill('About AURELIA')
++  await page.getByRole('textbox', { name: 'Content', exact: true }).fill('A small moment of care, every day.\n\nExplore our store at your own pace.\n\nOur team is here to help with your questions.')
++  await page.getByRole('combobox', { name: 'Publishing status', exact: true }).selectOption('published')
++  await page.getByRole('button', { name: 'Save changes', exact: true }).click()
++  await expect(page.getByRole('status')).toContainText('About page published.')
++  expect(state.about.slug).toBe('about')
++  await page.getByRole('link', { name: 'View About page' }).click()
++  await expect(page.getByRole('heading', { name: 'About AURELIA', exact: true })).toBeVisible()
++  await expect(page.getByText('A small moment of care, every day.')).toBeVisible()
++  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true)
++  await page.screenshot({ path: 'test-results/about-desktop.png', fullPage: true })
++  for (const width of [1024, 768, 390]) {
++    await page.setViewportSize({ width, height: 844 })
++    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `Horizontal overflow at ${width}px`).toBe(true)
++  }
++  await page.screenshot({ path: 'test-results/about-mobile.png', fullPage: true })
++  await page.goto('/admin/about')
++  await page.getByRole('combobox', { name: 'Publishing status', exact: true }).selectOption('draft')
++  await page.getByRole('button', { name: 'Save changes', exact: true }).click()
++  await expect(page.getByRole('status')).toContainText('It is hidden from visitors.')
++  await page.goto('/pages/about')
++  await expect(page.getByText('Our About page is not available right now.')).toBeVisible()
++})
++
++test('journal has working pagination and an image-free article remains readable', async ({ page }) => {
++  const state = await fixture(page, { admin: false })
++  state.blogs = Array.from({ length: 13 }, (_, index) => ({ _id: String(index + 1), title: `Guide ${index + 1}`, slug: `guide-${index + 1}`, excerpt: 'A guide for your daily routine.', image: '', content: 'A short article.\n\nA second paragraph.', status: 'published' }))
++  await page.goto('/blog')
++  await expect(page.getByRole('heading', { name: 'Guide 1', exact: true })).toBeVisible()
++  await page.getByRole('link', { name: 'Next →', exact: true }).click()
++  await expect(page).toHaveURL(/\/blog\?page=2$/)
++  await expect(page.getByRole('heading', { name: 'Guide 13', exact: true })).toBeVisible()
++  await page.getByRole('link', { name: 'Read guide', exact: true }).click()
++  await expect(page.getByRole('heading', { name: 'Guide 13' })).toBeVisible()
++  await expect(page.locator('.blog-hero-image')).toHaveCount(0)
++})
++
++test('an anonymous visitor cannot open the blog or About admin editors', async ({ page }) => {
++  await fixture(page, { admin: false })
++  for (const path of ['/admin/blogs', '/admin/about']) {
++    await page.goto(path)
++    await expect(page.getByRole('textbox', { name: 'Content', exact: true })).toHaveCount(0)
++    await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
++  }
++})
+diff --git a/frontend/tests/serve-production.mjs b/frontend/tests/serve-production.mjs
+index 76d5afa13d37ae7b7a3b53a7468b64f0494a90ca..9d0f1346421d142e0811f7ffb2f5382d88a7ca80 100644
+--- a/frontend/tests/serve-production.mjs
++++ b/frontend/tests/serve-production.mjs
+@@ -2,7 +2,10 @@
+ // Playwright. Uses the actual production app/CSP and compiled frontend.
+ import { fileURLToPath } from 'node:url'
+ import { createReadyApp } from '../../backend/admin-ready/app.js'
+-import { SiteSettings } from '../../backend/models/domainModels.js'
++import { SiteSettings, Page, BlogPost } from '../../backend/models/domainModels.js'
+ SiteSettings.findOne = () => ({ select: () => ({ lean: async () => ({ brandName: 'AURELIA' }) }) })
++// Content API responses are supplied by each browser fixture. Metadata lookups
++// must also be isolated, including direct navigation to dynamic article pages.
++Page.findOne = BlogPost.findOne = () => ({ lean: async () => null })
+ const app = createReadyApp({ config: { NODE_ENV:'production', CLIENT_URL:'http://127.0.0.1:5300', TRUST_PROXY:0, SESSION_SECRET:'browser-fixture-session-secret-32-characters', MFA_ENCRYPTION_KEY:'browser-fixture-encryption-key-32-characters', INTEGRATIONS_DIRECTORY:fileURLToPath(new URL('./.fixture-integrations/',import.meta.url)) }, staticDirectory:fileURLToPath(new URL('../dist-admin/',import.meta.url)) })
+ app.listen(5300,'127.0.0.1',()=>console.log('Production browser fixture ready on 5300'))
+diff --git a/shared/seo.mjs b/shared/seo.mjs
+index 5d47f760aba268936b5d69d4a83ae2bcad162027..9e5c7c2a361369d0f4c6c381030accef1a4b7bd3 100644
+--- a/shared/seo.mjs
++++ b/shared/seo.mjs
+@@ -36,7 +36,7 @@ export function buildMetadata({ path = '/', search = '', kind, record, settings
+   const brand = settings.brandName || 'AURELIA', missing = status === 404
+   const params = new URLSearchParams(search)
+   const page = Math.max(1, Number.parseInt(params.get('page'), 10) || 1)
+-  const paginated = (path === '/shop' || kind === 'categories') && page > 1
++  const paginated = (path === '/shop' || path === '/blog' || kind === 'categories') && page > 1
+   const filtered = path === '/shop' && ['search', 'category', 'sort', 'minPrice', 'maxPrice'].some(key => params.has(key) && params.get(key))
+   const baseTitle = missing ? 'Page not found' : record?.name || record?.title || fixed?.title || brand
+   const title = `${plainText(seo.title, 160) || `${baseTitle} | ${brand}`}${paginated ? ` — Page ${page}` : ''}`

@@ -1,0 +1,25 @@
+.about-page { padding: clamp(32px, 6vw, 80px) clamp(20px, 4vw, 56px) 90px; }
+.about-heading { border-bottom: 1px solid var(--line); padding-bottom: 38px; }
+.about-heading h1 { max-width: 900px; font-size: clamp(2.5rem, 6vw, 5.5rem); font-weight: 400; line-height: 1.08; margin: 20px 0 0; overflow-wrap: anywhere; }
+.about-story { display: grid; grid-template-columns: minmax(200px, .8fr) minmax(0, 1.4fr); gap: clamp(28px, 6vw, 90px); align-items: start; padding: 55px 0; }
+.about-mark { aspect-ratio: 4 / 5; background: var(--rose); display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--ink); }
+.about-mark > span { font-family: Georgia, serif; font-size: clamp(130px, 20vw, 270px); font-weight: 400; line-height: 1; }
+.about-mark small { padding: 15px; letter-spacing: .16em; text-align: center; overflow-wrap: anywhere; max-width: 100%; }
+.about-copy p { white-space: pre-line; overflow-wrap: anywhere; line-height: 1.9; color: var(--muted); margin: 0 0 24px; }
+.about-copy .about-intro { font-size: clamp(1.2rem, 2vw, 1.6rem); color: var(--ink); line-height: 1.65; }
+.about-footer { border-top: 1px solid var(--line); padding-top: 38px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 24px; }
+.about-footer h2 { font-size: clamp(1.8rem, 3vw, 2.6rem); font-weight: 400; margin: 8px 0; }
+.about-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 22px; }
+.about-actions .button { display: inline-flex; align-items: center; gap: 14px; }
+.journal-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 24px; margin: 40px 0 65px; }
+.journal-pagination a { text-decoration: underline; text-underline-offset: 4px; }
+.blog-image-placeholder { display: grid; place-items: center; min-height: 220px; background: var(--rose); color: var(--ink); font-family: Georgia, serif; font-size: 6rem; }
+.content-editor-preview { padding: 24px; border: 1px solid #e2e6ea; background: #fffdf9; overflow-wrap: anywhere; }
+.content-editor-preview img { display: block; max-height: 300px; width: 100%; object-fit: cover; margin-bottom: 20px; }
+.content-editor-preview .content-prose { white-space: pre-wrap; }
+@media (max-width: 650px) {
+  .about-story { grid-template-columns: 1fr; padding: 30px 0; }
+  .about-mark { aspect-ratio: 16 / 9; }
+  .about-mark > span { font-size: 120px; }
+  .about-page { padding-bottom: 55px; }
+}

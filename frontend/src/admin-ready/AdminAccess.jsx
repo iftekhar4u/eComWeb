@@ -1,0 +1,31 @@
+import {useState} from 'react'
+import {Link,useSearchParams} from 'react-router-dom'
+import {FiLock,FiArrowRight,FiCheckCircle,FiCopy,FiDownload} from 'react-icons/fi'
+import {useAuth} from '../context/AuthContext'
+import {api,message} from './studioApi'
+function AccessShell({title,subtitle,children}){
+  return <div className="aurelia-studio ready-access"><Link to="/" className="ready-access-brand">AURELIA<small>ADMIN STUDIO</small></Link><main className="ready-access-card"><span className="ready-access-icon"><FiLock/></span><h1>{title}</h1><p className="ready-muted">{subtitle}</p>{children}</main><p className="ready-access-footer">Administrator access · <Link to="/">Return to store</Link></p></div>
+}
+export function AdminLogin(){
+  const {setUser,setMfaRequired,logout}=useAuth(),[params]=useSearchParams()
+  const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
+  async function submit(e){e.preventDefault();if(busy)return;setBusy(true);setError('');try{
+    const {data}=await api.post('/auth/login',{email:email.trim(),password})
+    if(data.user.role!=='admin'){await logout();setError('Use an administrator account to sign in.');return}
+    setUser(data.user);setMfaRequired(Boolean(data.mfaRequired))
+  }catch(e){setError(message(e))}finally{setBusy(false)}}
+  return <AccessShell title="Welcome back" subtitle="Sign in to manage your AURELIA store.">{params.get('password')==='changed'&&<p className="studio-notice" role="status">Password changed. Sign in with your new password.</p>}<form className="studio-form" onSubmit={submit}><label>Email address<input autoComplete="username" type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Password<input autoComplete="current-password" type="password" minLength={12} maxLength={128} required value={password} onChange={e=>setPassword(e.target.value)}/></label>{error&&<p className="studio-error" role="alert">{error}</p>}<button className="studio-primary" disabled={busy}>{busy?'Signing in…':<>Sign in <FiArrowRight/></>}</button></form><p className="ready-access-help">Use your existing administrator credentials. Authenticator verification follows sign-in.</p></AccessShell>
+}
+export function AdminMfa(){
+  const {user,setUser,setMfaRequired,logout}=useAuth()
+  const [setup,setSetup]=useState(null),[code,setCode]=useState(''),[recovery,setRecovery]=useState(false),[saved,setSaved]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('')
+  async function enroll(){if(busy)return;setBusy(true);setError('');try{const {data}=await api.post('/admin-ready/security/setup',{});setSetup(data);setSaved(false)}catch(e){setError(message(e))}finally{setBusy(false)}}
+  async function submit(e){e.preventDefault();if(busy)return;setBusy(true);setError('');try{const {data}=await api.post(`/admin-ready/security/${recovery?'recover':'verify'}`,{code:code.trim()});setUser(data.user);setMfaRequired(false)}catch(e){setError(message(e))}finally{setBusy(false)}}
+  function download(){const blob=new Blob([`AURELIA recovery codes\nAccount: ${user.email}\nKeep private. Each code is single use.\n\n${setup.recoveryCodes.join('\n')}\n`],{type:'text/plain'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='aurelia-recovery-codes.txt';a.click();URL.revokeObjectURL(url);setNotice('Recovery codes downloaded. Store them somewhere private.')}
+  return <AccessShell title={user.mfaEnabled?'Verify your sign-in':'Set up your authenticator'} subtitle={user.mfaEnabled?'Enter the current code from your authenticator app.':'One-time setup protects your store and customer information.'}>
+    {!user.mfaEnabled&&!setup&&<><ol className="ready-steps"><li>Open Google Authenticator, Microsoft Authenticator, or another TOTP app.</li><li>Add an account using the setup key below.</li><li>Save recovery codes, then enter a six-digit code.</li></ol><button className="studio-primary" disabled={busy} onClick={enroll}>{busy?'Preparing…':'Set up authenticator'}</button></>}
+    {setup&&<><div className="ready-enrollment"><label>Account<span>{user.email}</span></label><label>Setup key<code>{setup.secret}</code></label><button type="button" onClick={async()=>{try{await navigator.clipboard.writeText(setup.secret);setNotice('Setup key copied.')}catch{setNotice('Select and copy the setup key above.')}}}><FiCopy/> Copy setup key</button><p>In your app select “Enter a setup key”, paste this key, and choose “Time based”.</p><details><summary>Open an authenticator app</summary><a href={setup.otpauthUrl}>Add this account</a></details></div><h2 className="ready-subheading">Save your recovery codes</h2><p className="ready-muted">Each code can be used once if you lose your authenticator.</p><div className="ready-recovery">{setup.recoveryCodes.map(c=><code key={c}>{c}</code>)}</div><button type="button" onClick={download}><FiDownload/> Download recovery codes</button><label className="check-label ready-saved"><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)}/><span>I saved my recovery codes securely.</span></label></>}
+    {(user.mfaEnabled||setup)&&<form className="studio-form ready-verify" onSubmit={submit}><label>{recovery?'Recovery code':'Six-digit code'}<input autoComplete="one-time-code" autoFocus inputMode={recovery?'text':'numeric'} pattern={recovery?'[a-fA-F0-9]{12}':'[0-9]{6}'} maxLength={recovery?12:6} value={code} onChange={e=>setCode(e.target.value)} required/></label><button className="studio-primary" disabled={busy||Boolean(setup&&!saved)}>{busy?'Verifying…':<>Verify and open admin <FiCheckCircle/></>}</button>{user.mfaEnabled&&<button type="button" onClick={()=>{setRecovery(!recovery);setCode('');setError('')}}>{recovery?'Use authenticator code':'Use a recovery code'}</button>}{!user.mfaEnabled&&setup&&<button type="button" disabled={busy} onClick={enroll}>Refresh expired setup</button>}</form>}
+    {error&&<p className="studio-error" role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}<button className="ready-signout" disabled={busy} onClick={async()=>{try{await logout()}catch(e){setError(message(e))}}}>Sign out</button>
+  </AccessShell>
+}

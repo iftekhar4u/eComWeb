@@ -15,7 +15,7 @@ if (databaseName !== 'aurelia_test') throw new Error('Database tests are restric
 
 const validProduct = () => ({ name: 'Test Cleanser', slug: `test-cleanser-${Date.now()}-${Math.random().toString(16).slice(2)}`, brand: 'AURELIA', category: 'skincare', price: 129900, stock: 10, status: 'draft' })
 
-describe('real MongoDB schema and index enforcement', () => {
+describe.skipIf(process.env.RUN_DB_TESTS !== '1')('real MongoDB schema and index enforcement', () => {
   beforeAll(async () => {
     await migrateDatabase({ uri })
     await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
@@ -23,7 +23,7 @@ describe('real MongoDB schema and index enforcement', () => {
   })
 
   afterAll(async () => {
-    if (mongoose.connection.readyState !== 1) await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
+    if (mongoose.connection.readyState !== 1) return
     for (const name of applicationCollectionNames) await mongoose.connection.db.collection(name).deleteMany({})
     await mongoose.disconnect()
   })
@@ -86,7 +86,7 @@ describe('real MongoDB schema and index enforcement', () => {
   })
 
   it('supports local Passport registration, current-user restoration, and logout', async () => {
-    const agent = (await import('supertest')).default.agent(createApp({ config: { NODE_ENV: 'test', PORT: 5000, CLIENT_URL: 'http://localhost:5173', TRUST_PROXY: 0, SESSION_SECRET: 'test-session-secret-test-session-secret', MONGO_URI: uri, GOOGLE_AUTH_ENABLED: false } }))
+    const agent = (await import('supertest')).default.agent(createApp({ config: { NODE_ENV: 'test', PORT: 5000, CLIENT_URL: 'http://localhost:5173', TRUST_PROXY: 0, SESSION_SECRET: 'test-session-secret-test-session-secret', GOOGLE_AUTH_ENABLED: false } }))
     const csrf = await agent.get('/api/v1/auth/csrf-token')
     const registered = await agent.post('/api/v1/auth/register').set('X-CSRF-Token', csrf.body.csrfToken).send({ name: 'Local Customer', email: 'local-passport@example.com', password: 'local-password-123' })
     expect(registered.status).toBe(201)

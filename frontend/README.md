@@ -1,16 +1,7 @@
-# React + Vite
+# AURELIA frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React storefront and Admin Ready UI. Run `npm run dev` here for frontend-only development, with the backend running separately. Prefer `npm run dev` from the project root to start both.
 
-Currently, two official plugins are available:
+`src/App.jsx` routes `/admin/*` to `src/admin-ready/ReadyAdmin.jsx`. Both Vite configuration entry points use `vite.config.js`; builds go to `dist-admin`. API requests use the configured proxy and session cookies.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+See `../README.md`, `../docs/ARCHITECTURE.md` and `../docs/CHANGES.md` for setup, architecture and exact changes.

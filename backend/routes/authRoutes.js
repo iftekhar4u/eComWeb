@@ -4,37 +4,21 @@ import { Router } from 'express'
 import argon2 from 'argon2'
 import passport from 'passport'
 import { rateLimit } from 'express-rate-limit'
-import { generateSecret, generateURI, verify } from 'otplib'
+import securityRoutes from '../admin-ready/security.js'
 import { z } from 'zod'
 import User from '../models/User.js'
 import { addressInput, objectId, fail } from '../services/validation.js'
-import { protect, protectPendingAdmin, safeUser, adminMfaRequired } from '../middleware/authMiddleware.js'
+import { protect, safeUser, adminMfaRequired } from '../middleware/authMiddleware.js'
 import { issueCsrfToken } from '../middleware/csrfMiddleware.js'
 import { createGoogleState, GOOGLE_STATE_MAX_AGE_MS } from '../config/passport.js'
 
 const router = Router()
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, message: { message: 'Too many attempts. Please try again in 15 minutes.' } })
-router.use(['/login', '/register', '/mfa/setup', '/mfa/verify', '/mfa/recover', '/password'], authLimiter)
+router.use(['/login', '/register', '/password'], authLimiter)
 const credentials = z.object({ email: z.string().email().max(254), password: z.string().min(12).max(128) }).strict()
 const registration = credentials.extend({ name: z.string().trim().min(2).max(100) }).strict()
-const mfaCode = z.object({ code: z.string().regex(/^\d{6}$/) }).strict()
-
-function encryptionKey() {
-	const key = Buffer.from(process.env.MFA_ENCRYPTION_KEY || 'test-mfa-encryption-key-test-mfa-key', 'utf8')
-	return crypto.createHash('sha256').update(key).digest()
-}
-
-function encryptSecret(secret) {
-	const iv = crypto.randomBytes(12)
-	const cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv)
-	const encrypted = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()])
-	return `${iv.toString('base64')}.${cipher.getAuthTag().toString('base64')}.${encrypted.toString('base64')}`
-}
-
-function decryptSecret(value) {
-	const [iv, tag, encrypted] = value.split('.'); const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv, 'base64')); decipher.setAuthTag(Buffer.from(tag, 'base64'))
-	return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64')), decipher.final()]).toString('utf8')
-}
+// Legacy routes reuse the hardened enrollment/session rotation implementation.
+router.use('/mfa', securityRoutes)
 
 async function establishSession(req, user, { reauthenticated = false, remember = false } = {}) {
 	await new Promise((resolve, reject) => req.session.regenerate((error) => error ? reject(error) : resolve()))
@@ -85,10 +69,9 @@ router.patch('/me', protect, async (req, res) => {
 router.get('/addresses', protect, (req, res) => res.json({ addresses: req.user.addresses }))
 router.post('/addresses', protect, async (req, res) => {
   const address = addressInput.parse(req.body)
-  if (req.user.addresses.length >= 10) throw fail(400, 'You can save up to ten addresses. Remove an old address first.')
-  req.user.addresses.push(address)
-  await req.user.save()
-  res.status(201).json({ addresses: req.user.addresses })
+  const user = await User.findOneAndUpdate({ _id: req.user._id, sessionVersion: req.user.sessionVersion, 'addresses.9': { $exists: false } }, { $push: { addresses: address } }, { new: true, runValidators: true })
+  if (!user) throw fail(409, 'Address limit reached or account changed. Refresh and remove an old address if needed.')
+  res.status(201).json({ addresses: user.addresses })
 })
 router.delete('/addresses/:id', protect, async (req, res) => {
   const id = objectId.parse(req.params.id)
@@ -106,19 +89,6 @@ router.post('/password', protect, async (req, res) => {
   await safeEmailEvent('password_changed', { userId: user._id, email: user.email, name: user.name, sessionVersion: user.sessionVersion + 1 })
   await new Promise((resolve, reject) => req.session.destroy(error => error ? reject(error) : resolve()))
   res.clearCookie('aurelia.sid').json({ message: 'Password changed. Sign in with your new password.' })
-})
-router.post('/mfa/recover', protectPendingAdmin, async (req, res) => {
-  const { code } = z.object({ code: z.string().regex(/^[a-f0-9]{12}$/) }).strict().parse(req.body)
-  const hashes = req.user.mfa.recoveryCodeHashes || []
-  for (const hash of hashes) {
-    if (await argon2.verify(hash, code)) {
-      const used = await User.updateOne({ _id: req.user._id, 'mfa.recoveryCodeHashes': hash }, { $pull: { 'mfa.recoveryCodeHashes': hash } })
-      if (!used.modifiedCount) break
-      req.session.mfaVerified = true
-      return res.json({ user: safeUser(req.user) })
-    }
-  }
-  res.status(401).json({ message: 'Invalid or already used recovery code' })
 })
 router.get('/me', protect, (req, res) => res.json({ user: safeUser(req.user) }))
 router.post('/google/link', protect, async (req, res, next) => {
@@ -157,26 +127,5 @@ router.get('/google/callback', (req, res, next) => {
 			res.redirect(`${req.app.locals.clientUrl}/shop`)
 		} catch (sessionError) { next(sessionError) }
 	})(req, res, next)
-})
-router.post('/mfa/setup', protectPendingAdmin, async (req, res, next) => {
-	try {
-		if (req.user.mfa?.enabled) return res.status(409).json({ message: 'MFA is already enrolled. Use your authenticator or a recovery code.' })
-		const secret = generateSecret()
-		const recoveryCodes = Array.from({ length: 8 }, () => crypto.randomBytes(6).toString('hex'))
-		req.user.mfa.secretEncrypted = encryptSecret(secret)
-		req.user.mfa.recoveryCodeHashes = await Promise.all(recoveryCodes.map((code) => argon2.hash(code, { type: argon2.argon2id })))
-		await req.user.save()
-		res.json({ secret, otpauthUrl: generateURI({ issuer: 'AURELIA', label: req.user.email, secret }), recoveryCodes })
-	} catch (error) { next(error) }
-})
-router.post('/mfa/verify', protectPendingAdmin, async (req, res, next) => {
-	try {
-		const { code } = mfaCode.parse(req.body)
-		if (!req.user.mfa.secretEncrypted || !(await verify({ token: code, secret: decryptSecret(req.user.mfa.secretEncrypted) })).valid) return res.status(401).json({ message: 'Invalid MFA code' })
-		req.user.mfa.enabled = true
-		await req.user.save()
-		req.session.mfaVerified = true
-		res.json({ user: safeUser(req.user) })
-	} catch (error) { next(error) }
 })
 export default router

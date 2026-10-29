@@ -1,0 +1,132 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
+import { createServer, get } from 'node:http'
+import { once } from 'node:events'
+import session from 'express-session'
+import request from 'supertest'
+import { createReadyApp } from '../app.js'
+
+const config = {
+  NODE_ENV: 'test',
+  CLIENT_URL: 'http://localhost:5173',
+  TRUST_PROXY: 0,
+  SESSION_SECRET: 'request-ip-regression-isolated-session-secret',
+  GOOGLE_AUTH_ENABLED: false,
+}
+
+// Real HTTP requests and middleware, with an isolated session store. No database,
+// environment credentials, payment gateway or email service is accessed.
+async function serve(t, { store = new session.MemoryStore(), trustProxy = 0, before } = {}) {
+  const app = createReadyApp({
+    config: { ...config, TRUST_PROXY: trustProxy }, store,
+    gateway: {}, paymentSettings: {}, integrations: {}, emailService: {},
+  })
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push(req)
+    before?.(req, res)
+    app(req, res)
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(() => new Promise(resolve => {
+    server.close(resolve)
+    server.closeAllConnections()
+  }))
+  return { server, requests, client: request(server) }
+}
+
+test('a client disconnect during session lookup preserves its rate-limit key', { timeout: 5000 }, async t => {
+  let resumeLookup
+  let lookupStarted
+  const lookup = new Promise(resolve => { lookupStarted = resolve })
+  let processed
+  const handled = new Promise(resolve => { processed = resolve })
+  const store = new session.MemoryStore()
+  store.get = (_id, callback) => {
+    resumeLookup = () => callback(null, {
+      cookie: { originalMaxAge: 1800000, expires: new Date(Date.now() + 1800000), httpOnly: true, path: '/' },
+    })
+    lookupStarted()
+  }
+  const logged = []
+  t.mock.method(console, 'error', (...args) => logged.push(args))
+  const { server, requests } = await serve(t, {
+    store,
+    before: (_req, res) => {
+      const end = res.end
+      res.end = function (...args) { processed(); return end.apply(this, args) }
+    },
+  })
+  const id = 'isolated-session'
+  const signature = createHmac('sha256', config.SESSION_SECRET).update(id).digest('base64').replace(/=+$/, '')
+  const client = get({
+    host: '127.0.0.1', port: server.address().port, path: '/api/health',
+    headers: { Cookie: `aurelia.sid=${encodeURIComponent(`s:${id}.${signature}`)}` },
+  })
+  client.on('error', () => {})
+  await lookup
+  // Do not read req.ip or remoteAddress here: doing so can itself cache Node's
+  // peer address and hide the original race.
+  const closed = once(requests[0].socket, 'close')
+  client.destroy()
+  await closed
+  resumeLookup()
+  await handled
+  assert.deepEqual(logged, [], 'no undefined-IP validation or Hash.update error')
+  assert.equal(requests[0].ip, '127.0.0.1')
+  assert.equal(requests[0].rateLimit.key, '127.0.0.1')
+})
+
+test('normal requests retain draft-8 headers and untrusted forwarding cannot change the key', async t => {
+  const { client, requests } = await serve(t)
+  const first = await client.get('/api/health')
+  const second = await client.get('/api/health').set('X-Forwarded-For', '203.0.113.8')
+  assert.equal(first.status, 200)
+  assert.equal(second.status, 200)
+  assert.deepEqual(second.body, { status: 'ok', brand: 'AURELIA' })
+  assert.match(first.headers['ratelimit-policy'], /q=200; w=900; pk=:/)
+  assert.match(second.headers.ratelimit, /r=198/)
+  assert.equal(requests[0].rateLimit.key, requests[1].rateLimit.key)
+  assert.equal(requests[1].ip, '127.0.0.1')
+})
+
+test('configured trusted proxy keeps client limits separate and still returns 429', async t => {
+  const { client, requests } = await serve(t, { trustProxy: 1 })
+  for (let count = 0; count < 200; count += 1) {
+    assert.equal((await client.get('/api/health').set('X-Forwarded-For', '203.0.113.9')).status, 200)
+  }
+  const blocked = await client.get('/api/health').set('X-Forwarded-For', '203.0.113.9')
+  const other = await client.get('/api/health').set('X-Forwarded-For', '203.0.113.10')
+  assert.equal(blocked.status, 429)
+  assert.ok(Number(blocked.headers['retry-after']) > 0)
+  assert.equal(other.status, 200)
+  assert.match(other.headers.ratelimit, /r=199/)
+  assert.equal(requests.at(-1).rateLimit.key, '203.0.113.10')
+})
+
+test('IPv6 addresses in the same default /56 share the rate-limit bucket', async t => {
+  const { client, requests } = await serve(t, { trustProxy: 1 })
+  const first = await client.get('/api/health').set('X-Forwarded-For', '2001:db8:abcd:1200::1')
+  const second = await client.get('/api/health').set('X-Forwarded-For', '2001:db8:abcd:12ff::2')
+  const other = await client.get('/api/health').set('X-Forwarded-For', '2001:db8:abcd:1300::1')
+  assert.equal(first.status, 200)
+  assert.equal(second.status, 200)
+  assert.equal(other.status, 200)
+  assert.equal(requests[0].rateLimit.key, requests[1].rateLimit.key)
+  assert.notEqual(requests[0].rateLimit.key, requests[2].rateLimit.key)
+  assert.match(second.headers.ratelimit, /r=198/)
+  assert.match(other.headers.ratelimit, /r=199/)
+})
+
+test('a live request with no peer IP is rejected before rate-limit hashing', async t => {
+  const logged = []
+  t.mock.method(console, 'error', (...args) => logged.push(args))
+  const { client } = await serve(t, {
+    before: req => Object.defineProperty(req.socket, 'remoteAddress', { value: undefined }),
+  })
+  const response = await client.get('/api/health')
+  assert.equal(response.status, 400)
+  assert.deepEqual(logged, [])
+})

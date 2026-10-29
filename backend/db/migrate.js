@@ -1,7 +1,8 @@
+import { backfillPayments } from '../payments/database.js'
 import mongoose from 'mongoose'
 import { collectionDefinitions, applicationCollectionNames } from './collectionDefinitions.js'
 
-const migrationVersion = '002_dynamic_commerce'
+const migrationVersion = '003_recoverable_payments'
 const sessionDefinition = {
   validator: { $jsonSchema: { bsonType: 'object', required: ['_id', 'expires', 'session'], properties: { _id: { bsonType: 'string', maxLength: 256 }, expires: { bsonType: 'date' }, session: { bsonType: 'string', maxLength: 1048576 } }, additionalProperties: false } },
   indexes: [[{ expires: 1 }, { name: 'ttl_sessions', expireAfterSeconds: 0 }]],
@@ -54,37 +55,45 @@ export async function preflightDatabase(db) {
 export async function migrateDatabase({ uri, allowDatabase = ['aurelia_dev', 'aurelia_test'], dryRun = false }) {
   const name = databaseName(uri)
   if (!allowDatabase.includes(name)) throw new Error(`Refusing migration for database ${name}; allowed: ${allowDatabase.join(', ')}`)
-  await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
-  const db = mongoose.connection.db
-  const conflicts = await preflightDatabase(db)
-  if (conflicts.length) {
-    await mongoose.disconnect()
-    return { database: name, conflicts, applied: false }
-  }
-  if (!dryRun) {
-    for (const [collectionName, definition] of Object.entries(collectionDefinitions)) {
-      const exists = await db.listCollections({ name: collectionName }).hasNext()
-      if (!exists) await db.createCollection(collectionName, { validator: definition.validator, validationLevel: 'strict', validationAction: 'error' })
-      else await db.command({ collMod: collectionName, validator: definition.validator, validationLevel: 'strict', validationAction: 'error' })
-      if (collectionName === 'inventory_reservations') {
-        for (const index of await db.collection(collectionName).listIndexes().toArray()) {
-          if (index.expireAfterSeconds !== undefined && index.key.expiresAt === 1) await db.collection(collectionName).dropIndex(index.name)
-        }
-      }
-      for (const [key, options] of definition.indexes) await ensureIndex(db.collection(collectionName), key, options)
+  await mongoose.connect(uri, { autoIndex: false, autoCreate: false, serverSelectionTimeoutMS: 5000 })
+  try {
+    const db = mongoose.connection.db
+    const conflicts = await preflightDatabase(db)
+    if (conflicts.length) {
+      return { database: name, conflicts, applied: false }
     }
-    const sessionsExists = await db.listCollections({ name: 'sessions' }).hasNext()
-    if (!sessionsExists) await db.createCollection('sessions', { validator: sessionDefinition.validator, validationLevel: 'strict', validationAction: 'error' })
-    else await db.command({ collMod: 'sessions', validator: sessionDefinition.validator, validationLevel: 'strict', validationAction: 'error' })
-    for (const [key, options] of sessionDefinition.indexes) await ensureIndex(db.collection('sessions'), key, options)
-    const metadataExists = await db.listCollections({ name: 'schema_migrations' }).hasNext()
-    if (!metadataExists) await db.createCollection('schema_migrations', { validator: { $jsonSchema: { bsonType: 'object', required: ['version', 'appliedAt'], properties: { _id: { bsonType: 'objectId' }, version: { bsonType: 'string', maxLength: 100 }, appliedAt: { bsonType: 'date' } }, additionalProperties: false } }, validationLevel: 'strict', validationAction: 'error' })
-    await ensureIndex(db.collection('schema_migrations'), { version: 1 }, { unique: true, name: 'uq_schema_migrations_version' })
-    await db.collection('schema_migrations').updateOne({ version: migrationVersion }, { $setOnInsert: { version: migrationVersion, appliedAt: new Date() } }, { upsert: true })
-  }
-  const result = { database: name, collections: [...applicationCollectionNames, 'sessions', 'schema_migrations'], conflicts, applied: !dryRun }
-  await mongoose.disconnect()
-  return result
+    if (!dryRun) {
+      for (const [collectionName, definition] of Object.entries(collectionDefinitions)) {
+        const exists = await db.listCollections({ name: collectionName }).hasNext()
+        if (!exists) await db.createCollection(collectionName, { validator: definition.validator, validationLevel: 'strict', validationAction: 'error' })
+        else await db.command({ collMod: collectionName, validator: definition.validator, validationLevel: 'strict', validationAction: 'error' })
+        if (collectionName === 'inventory_reservations') {
+          for (const index of await db.collection(collectionName).listIndexes().toArray()) {
+            if (index.expireAfterSeconds !== undefined && index.key.expiresAt === 1) await db.collection(collectionName).dropIndex(index.name)
+          }
+        }
+
+      }
+      await backfillPayments(db)
+      // Old unscoped dedup index would incorrectly conflate two merchant contexts.
+      for (const index of await db.collection('payment_events').listIndexes().toArray()) {
+        if (JSON.stringify(index.key) === JSON.stringify({ provider: 1, environment: 1, providerEventId: 1 })) await db.collection('payment_events').dropIndex(index.name)
+      }
+      for (const [collectionName, definition] of Object.entries(collectionDefinitions)) {
+        for (const [key, options] of definition.indexes) await ensureIndex(db.collection(collectionName), key, options)
+      }
+      const sessionsExists = await db.listCollections({ name: 'sessions' }).hasNext()
+      if (!sessionsExists) await db.createCollection('sessions', { validator: sessionDefinition.validator, validationLevel: 'strict', validationAction: 'error' })
+      else await db.command({ collMod: 'sessions', validator: sessionDefinition.validator, validationLevel: 'strict', validationAction: 'error' })
+      for (const [key, options] of sessionDefinition.indexes) await ensureIndex(db.collection('sessions'), key, options)
+      const metadataExists = await db.listCollections({ name: 'schema_migrations' }).hasNext()
+      if (!metadataExists) await db.createCollection('schema_migrations', { validator: { $jsonSchema: { bsonType: 'object', required: ['version', 'appliedAt'], properties: { _id: { bsonType: 'objectId' }, version: { bsonType: 'string', maxLength: 100 }, appliedAt: { bsonType: 'date' } }, additionalProperties: false } }, validationLevel: 'strict', validationAction: 'error' })
+      await ensureIndex(db.collection('schema_migrations'), { version: 1 }, { unique: true, name: 'uq_schema_migrations_version' })
+      await db.collection('schema_migrations').updateOne({ version: migrationVersion }, { $setOnInsert: { version: migrationVersion, appliedAt: new Date() } }, { upsert: true })
+    }
+    const result = { version: migrationVersion, database: name, collections: [...applicationCollectionNames, 'sessions', 'schema_migrations'], conflicts, applied: !dryRun }
+    return result
+  } finally { await mongoose.disconnect() }
 }
 
 export { migrationVersion }

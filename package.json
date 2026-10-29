@@ -2,10 +2,32 @@
   "name": "aurelia-beauty-ecommerce",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"npm run dev --prefix frontend\" \"npm run dev --prefix backend\"",
-    "build": "npm run build --prefix frontend"
+    "dev": "node admin-tools/start.mjs",
+    "build": "node admin-tools/build.mjs",
+    "setup": "node admin-tools/setup.mjs",
+    "install:all": "node admin-tools/install.mjs",
+    "test:admin": "node --test backend/admin-ready/tests/*.test.js",
+    "test:email": "node --test backend/email/tests/*.test.js",
+    "start": "node admin-tools/production.mjs",
+    "test": "node admin-tools/test.mjs",
+    "test:db": "node admin-tools/test-database.mjs",
+    "test:browser": "npm --prefix frontend run test:browser",
+    "test:live": "node admin-tools/test-live.mjs",
+    "lint": "npm --prefix frontend run lint",
+    "check:bundle": "node admin-tools/bundle-budget.mjs",
+    "benchmark": "node admin-tools/benchmark.mjs",
+    "deploy:check": "node admin-tools/deploy-check.mjs",
+    "deploy:smoke": "node admin-tools/deploy-smoke.mjs",
+    "verify": "npm run lint && npm test && npm run test:db && npm run test:browser && npm run test:live && npm run check:bundle && npm run audit:all",
+    "audit:all": "npm audit --audit-level=moderate && npm --prefix backend audit --audit-level=moderate && npm --prefix frontend audit --audit-level=moderate"
   },
   "devDependencies": {
-    "concurrently": "^10.0.5"
+    "@axe-core/playwright": "4.14.0",
+    "lighthouse": "13.5.0",
+    "mongodb-memory-server": "11.3.0",
+    "selfsigned": "5.5.0"
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

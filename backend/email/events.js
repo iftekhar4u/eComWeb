@@ -1,6 +1,7 @@
 // Bound at server startup after the email collections have been provisioned.
 // Keeping delivery behind this boundary leaves standalone commerce consumers intact.
 let handler = null
+export function emailEventsAvailable() { return Boolean(handler) }
 export function bindEmailEvents(next) { handler = next }
 export async function emailEvent(kind, data, options = {}) { return handler?.(kind, data, options) }
 export async function safeEmailEvent(kind,data,options) {

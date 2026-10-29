@@ -1,3 +1,4 @@
+import { configureHttpServer, installShutdown } from '../production/lifecycle.js'
 import { migrationVersion } from '../db/migrate.js'
 import mongoose from 'mongoose'
 import { fileURLToPath } from 'node:url'
@@ -53,19 +54,13 @@ const paymentSettings = createPaymentSettings(config)
 const staticDirectory = config.NODE_ENV === 'production' ? fileURLToPath(new URL('../../frontend/dist-admin/', import.meta.url)) : undefined
 if (staticDirectory) await access(`${staticDirectory}/index.html`).catch(() => { throw new Error('Build the admin frontend first: node admin-tools/build.mjs') })
 const app = createReadyApp({ config, paymentSettings, staticDirectory, integrations, emailService })
-const server = app.listen(config.PORT, () => console.log(`AURELIA ready API: http://localhost:${config.PORT}; admin: ${config.CLIENT_URL}/admin`))
+const server = app.listen(config.PORT, '0.0.0.0')
+configureHttpServer(server)
+await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject) })
+console.log(`AURELIA ready API: http://localhost:${config.PORT}; admin: ${config.CLIENT_URL}/admin`)
 const stopEmail = emailService.start()
 const stopPayments = createPaymentWorker(paymentSettings).start()
-let stopping = false
-const shutdown = () => {
-  if (stopping) return
-  stopping = true
-  server.close(async () => {
-    await stopPayments()
-    await stopEmail()
-    bindEmailEvents(null)
-    await mongoose.disconnect()
-    process.exit(0)
-  })
-}
-process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown)
+installShutdown({ server, app, stopWorkers: [stopPayments, stopEmail], disconnect: async () => {
+  bindEmailEvents(null)
+  await mongoose.disconnect()
+} })

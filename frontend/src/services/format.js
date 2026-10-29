@@ -1,0 +1,3 @@
+export const money = paise => `Rs. ${(Number(paise || 0) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+export function toProduct(p) { return { ...p, id: String(p.id || p._id), pricePaise: p.price, price: p.price / 100, oldPrice: p.compareAtPrice ? p.compareAtPrice / 100 : undefined, highlights: p.benefits, tag: p.tags?.[0] || (p.bestSeller ? 'Bestseller' : p.newArrival ? 'New arrival' : 'AURELIA') } }
+export function readSaved(key) { try { const value = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(value) ? value.filter(i => /^[a-f\d]{24}$/i.test(i.id || '')) : [] } catch { return [] } }

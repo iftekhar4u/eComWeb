@@ -1,0 +1,25 @@
+.aurelia-whatsapp-button {
+  position: fixed;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: #20cf67;
+  color: #fff;
+  box-shadow: 0 0 0 9px #20cf6714, 0 5px 18px #14291c26;
+  text-decoration: none;
+  transition: transform .15s ease, background .15s ease;
+}
+.aurelia-whatsapp-button svg { width: 33px; height: 33px; }
+.aurelia-whatsapp-button:hover { color: #fff; background: #16b957; transform: translateY(-2px); }
+.aurelia-whatsapp-button:focus-visible { outline: 3px solid #143c24; outline-offset: 5px; }
+@media (max-width: 640px) {
+  .aurelia-whatsapp-button { right: max(18px, env(safe-area-inset-right)); bottom: calc(88px + env(safe-area-inset-bottom)); width: 52px; height: 52px; }
+}
+@media (prefers-reduced-motion: reduce) { .aurelia-whatsapp-button { transition: none; } }

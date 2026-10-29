@@ -1,3 +1,4 @@
+import { paymentDetails } from '../payments/adminRoutes.js'
 import { Router } from 'express'
 import { z } from 'zod'
 import Product from '../models/Product.js'
@@ -21,16 +22,16 @@ router.get('/overview', async (req, res) => {
   const { days, interval } = z.object({ days: z.coerce.number().refine(n => [7,30,90].includes(n)).default(30), interval: z.enum(['day','week']).default('day') }).strict().parse(req.query)
   const { start, end, previousStart } = periods(days)
   const range = { $gte: start, $lt: end }, before = { $gte: previousStart, $lt: start }
-  const sales = async createdAt => (await Order.aggregate([{ $match: { createdAt, paymentStatus: 'paid' } }, { $group: { _id: null, total: { $sum: revenueExpression } } }]))[0]?.total || 0
+  const sales = async createdAt => (await Order.aggregate([{ $match: { createdAt, paymentStatus: 'paid', paymentEnvironment: 'live' } }, { $group: { _id: null, total: { $sum: revenueExpression } } }]))[0]?.total || 0
   const [revenue, previousRevenue, orders, previousOrders, customers, previousCustomers, lowStock, pendingReviews, toFulfill, recentOrders, series, bestSellers] = await Promise.all([
     sales(range), sales(before), Order.countDocuments({ createdAt: range }), Order.countDocuments({ createdAt: before }),
     User.countDocuments({ role: 'customer', createdAt: range }), User.countDocuments({ role: 'customer', createdAt: before }),
     ProductVariant.countDocuments(lowFilter), Review.countDocuments({ moderation: 'pending' }), Order.countDocuments({ fulfillmentStatus: 'processing', inventoryStatus: 'committed' }),
     Order.find({ createdAt: range }).sort({ createdAt: -1 }).limit(5).select('orderNumber deliveryAddress.name totalPaise paymentStatus fulfillmentStatus createdAt').lean(),
-    Order.aggregate([{ $match: { createdAt: range, paymentStatus: 'paid' } }, { $group: { _id: { $dateTrunc: { date: '$createdAt', unit: interval, timezone: TIMEZONE, ...(interval === 'week' ? { startOfWeek: 'monday' } : {}) } }, amount: { $sum: revenueExpression } } }, { $sort: { _id: 1 } }]),
-    Order.aggregate([{ $match: { createdAt: range, paymentStatus: 'paid', refundedPaise: 0, fulfillmentStatus: { $ne: 'cancelled' } } }, { $unwind: '$items' }, { $group: { _id: '$items.sku', name: { $first: '$items.name' }, units: { $sum: '$items.quantity' } } }, { $sort: { units: -1, _id: 1 } }, { $limit: 4 }]),
+    Order.aggregate([{ $match: { createdAt: range, paymentStatus: 'paid', paymentEnvironment: 'live' } }, { $group: { _id: { $dateTrunc: { date: '$createdAt', unit: interval, timezone: TIMEZONE, ...(interval === 'week' ? { startOfWeek: 'monday' } : {}) } }, amount: { $sum: revenueExpression } } }, { $sort: { _id: 1 } }]),
+    Order.aggregate([{ $match: { createdAt: range, paymentStatus: 'paid', paymentEnvironment: 'live', refundedPaise: 0, fulfillmentStatus: { $ne: 'cancelled' } } }, { $unwind: '$items' }, { $group: { _id: '$items.sku', name: { $first: '$items.name' }, units: { $sum: '$items.quantity' } } }, { $sort: { units: -1, _id: 1 } }, { $limit: 4 }]),
   ])
-  res.json({ days, interval, timezone: TIMEZONE, start, end, revenue, orders, customers, lowStock, pendingReviews, toFulfill, recentOrders, series, bestSellers, threshold: LOW_STOCK, paymentsConfigured: Boolean(req.app.locals.gateway.enabled), changes: { revenue: change(revenue, previousRevenue), orders: change(orders, previousOrders), customers: change(customers, previousCustomers) } })
+  res.json({ days, interval, timezone: TIMEZONE, start, end, revenue, orders, customers, lowStock, pendingReviews, toFulfill, recentOrders, series, bestSellers, threshold: LOW_STOCK, paymentsConfigured: (await req.app.locals.payments.publicConfig()).razorpayEnabled, changes: { revenue: change(revenue, previousRevenue), orders: change(orders, previousOrders), customers: change(customers, previousCustomers) } })
 })
 router.get('/products', async (req,res) => {
   const { page, search, status, category } = query.parse(req.query)
@@ -55,12 +56,12 @@ router.get('/orders/:id', async (req,res) => {
   const item = await Order.findById(objectId.parse(req.params.id)).lean()
   if (!item) throw fail(404,'Order not found')
   const [payment, history] = await Promise.all([Payment.findOne({order:item._id}).select('provider providerPaymentId providerOrderId status').lean(), AuditLog.find({resourceType:'order',resourceId:String(item._id)}).sort({createdAt:-1}).limit(50).select('action summary createdAt').lean()])
-  res.json({item,payment,history})
+  res.json({item,payment,history,...await paymentDetails(item._id),serverNow:new Date()})
 })
 router.get('/customers', async (req,res) => {
   const {page,search,status} = query.parse(req.query)
   const data=await pageOf(User,{role:'customer',...(search && {$or:['name','email'].map(k=>({[k]:{$regex:escaped(search),$options:'i'}}))}),...(status && {status})},page,'name email phone status createdAt')
-  const totals=await Order.aggregate([{$match:{customer:{$in:data.items.map(c=>c._id)}}},{$group:{_id:'$customer',orderCount:{$sum:1},spend:{$sum:{$cond:[{$eq:['$paymentStatus','paid']},revenueExpression,0]}}}}])
+  const totals=await Order.aggregate([{$match:{customer:{$in:data.items.map(c=>c._id)}}},{$group:{_id:'$customer',orderCount:{$sum:1},spend:{$sum:{$cond:[{$and:[{$eq:['$paymentStatus','paid']},{$eq:['$paymentEnvironment','live']}]},revenueExpression,0]}}}}])
   res.json({...data,items:data.items.map(c=>({...c,...(totals.find(t=>String(t._id)===String(c._id)) || {orderCount:0,spend:0}),_id:c._id}))})
 })
 router.get('/customers/:id', async(req,res)=>{

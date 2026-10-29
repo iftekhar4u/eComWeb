@@ -1,4 +1,5 @@
-import { orderEmailEvents } from '../email/events.js'
+import { revenueExpression } from '../services/adminStudioMetrics.js'
+import { fulfillOrder } from '../payments/lifecycle.js'
 import { Router } from 'express'
 import { seoInput } from '../seo/schema.js'
 import { z } from 'zod'
@@ -7,7 +8,7 @@ import User from '../models/User.js'
 import { ProductVariant, Category, ProductCollection, BlogPost, Page, Homepage, SiteSettings, Order, Review, Subscriber, ContactMessage, InventoryMovement, AuditLog } from '../models/domainModels.js'
 import { protect, requireAdmin } from '../middleware/authMiddleware.js'
 import { objectId, slug, imageUrl, internalLink, fail } from '../services/validation.js'
-import { transaction, checkOrder, cancelUnpaid } from '../services/commerce.js'
+import { transaction, checkOrder } from '../services/commerce.js'
 const router = Router(); router.use(protect, requireAdmin)
 const money = z.number().int().min(0).max(100000000)
 const text = (max) => z.string().trim().max(max)
@@ -15,16 +16,16 @@ const status = z.enum(['draft', 'published', 'archived'])
 const pagination = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1), search: text(100).default('') }).strict()
 const productInput = z.object({ seo: seoInput.optional(), name: text(160).min(2), slug, description: text(10000), shortDescription: text(500).default(''), category: slug, gender: z.enum(['women', 'men', 'unisex']), price: money.min(100), compareAtPrice: money.optional(), stock: z.number().int().min(0).max(100000000), sku: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/), thumbnail: imageUrl, images: z.array(imageUrl).max(12).default([]), benefits: z.array(text(500)).max(50).default([]), status, bestSeller: z.boolean(), newArrival: z.boolean(), featured: z.boolean().default(false), version: z.number().int().optional() }).strict().refine(p => !p.compareAtPrice || p.compareAtPrice >= p.price, 'Original price must be at least selling price')
 const categoryInput = z.object({ seo: seoInput.optional(), name: text(100).min(2), slug, description: text(1000).default(''), image: imageUrl, order: z.number().int().min(0).max(100000), active: z.boolean() }).strict()
-const articleInput = z.object({ seo: seoInput.optional(), title: text(200).min(2), slug, content: text(50000).min(1), status, excerpt: text(1000).optional(), image: imageUrl.optional() }).strict()
+const articleInput = z.object({ seo: seoInput.optional(), title: text(200).min(2), slug, content: text(50000).min(1), status, excerpt: text(1000).optional(), image: imageUrl.optional(), updatedAt: z.string().datetime().optional() }).strict()
 const collectionInput = z.object({ seo: seoInput.optional(), name: text(120).min(2), slug, description: text(1000), products: z.array(objectId).max(500), status, order: z.number().int().min(0).max(100000) }).strict()
 const resources = { categories: [Category, categoryInput], blogs: [BlogPost, articleInput], pages: [Page, articleInput.omit({ excerpt: true, image: true })], collections: [ProductCollection, collectionInput] }
 async function audit(req, action, type, id) { await AuditLog.create({ actor: req.user._id, action, resourceType: type, resourceId: String(id), summary: `${action} ${type}` }) }
 router.get('/dashboard', async (req, res) => {
   const [products, customers, orders, pendingReviews, messages, sales, recentOrders] = await Promise.all([
     Product.countDocuments({ status: { $ne: 'archived' } }), User.countDocuments({ role: 'customer' }), Order.countDocuments(), Review.countDocuments({ moderation: 'pending' }), ContactMessage.countDocuments({ status: 'new' }),
-    Order.aggregate([{ $match: { paymentStatus: 'paid' } }, { $group: { _id: null, total: { $sum: { $subtract: ['$totalPaise', { $ifNull: ['$refundedPaise', 0] }] } } } }]), Order.find().sort({ createdAt: -1 }).limit(8).lean(),
+    Order.aggregate([{ $match: { paymentStatus: 'paid', paymentEnvironment: 'live' } }, { $group: { _id: null, total: { $sum: revenueExpression } } }]), Order.find().sort({ createdAt: -1 }).limit(8).lean(),
   ])
-  res.json({ products, customers, orders, pendingReviews, messages, revenuePaise: sales[0]?.total || 0, recentOrders, paymentsConfigured: req.app.locals.gateway.enabled })
+  res.json({ products, customers, orders, pendingReviews, messages, revenuePaise: sales[0]?.total || 0, recentOrders, paymentsConfigured: (await req.app.locals.payments.publicConfig()).razorpayEnabled })
 })
 router.get('/options/categories', async (_req, res) => res.json({ items: await Category.find().sort({ order: 1 }).select('name slug active').lean() }))
 router.get('/products', async (req, res) => {
@@ -75,36 +76,10 @@ router.put('/homepage', async (req, res) => {
   await audit(req, 'update', 'homepage', homepage._id); res.json({ homepage })
 })
 router.get('/orders', async (req, res) => { const { page } = pagination.parse(req.query); res.json({ items: await Order.find().sort({ createdAt: -1 }).skip((page - 1) * 20).limit(20).lean(), total: await Order.countDocuments(), page, pages: Math.ceil(await Order.countDocuments() / 20) }) })
-router.post('/orders/:id/check', async (req, res) => { const order = await Order.findById(objectId.parse(req.params.id)); if (!order) throw fail(404, 'Order not found'); res.json({ order: await checkOrder(order, req.app.locals.gateway) }) })
+router.post('/orders/:id/check', async (req, res) => { const order = await Order.findById(objectId.parse(req.params.id)); if (!order) throw fail(404, 'Order not found'); res.json({ order: await checkOrder(order, req.app.locals.payments) }) })
 router.patch('/orders/:id', async (req, res) => {
-  const { fulfillmentStatus, trackingNumber } = z.object({ fulfillmentStatus: z.enum(['processing', 'shipped', 'delivered', 'cancelled']), trackingNumber: text(100).default('') }).strict().parse(req.body)
-  let order = await Order.findById(objectId.parse(req.params.id)); if (!order) throw fail(404, 'Order not found')
-  if (fulfillmentStatus === 'cancelled' && order.paymentMethod === 'razorpay') {
-    order = await cancelUnpaid(order, req.app.locals.gateway)
-    if (order.fulfillmentStatus !== 'cancelled') throw fail(409, 'For a paid order, process the refund in Razorpay and check payment status here.')
-  } else {
-    order = await transaction(async session => {
-      const current = await Order.findById(order._id).session(session)
-      const beforeEmail = { paymentStatus: current.paymentStatus, fulfillmentStatus: current.fulfillmentStatus, refundedPaise: current.refundedPaise }
-      if (current.inventoryStatus !== 'committed') throw fail(409, 'Inventory must be confirmed before fulfillment.')
-      if (current.paymentMethod !== 'cod' && current.paymentStatus !== 'paid') throw fail(409, 'Payment must be captured before fulfillment.')
-      const transitions = { processing: ['processing', 'shipped', 'cancelled'], shipped: ['shipped', 'delivered'], delivered: ['delivered'] }
-      if (!transitions[current.fulfillmentStatus]?.includes(fulfillmentStatus)) throw fail(409, 'Invalid order status transition.')
-      if (fulfillmentStatus === 'cancelled') {
-        if (current.paymentMethod !== 'cod') throw fail(409, 'Refund this payment through Razorpay first.')
-        for (const item of current.items) {
-          const v = await ProductVariant.findByIdAndUpdate(item.variant, { $inc: { stockOnHand: item.quantity } }, { session, new: true })
-          await Product.updateOne({ _id: v.product }, { $set: { stock: v.stockOnHand }, $inc: { __v: 1 } }, { session })
-          await InventoryMovement.create([{ variant: item.variant, delta: item.quantity, reason: 'return', order: current._id, actor: req.user._id }], { session })
-        }
-        current.inventoryStatus = 'released'
-      }
-      current.fulfillmentStatus = fulfillmentStatus; current.trackingNumber = trackingNumber
-      if (current.paymentMethod === 'cod' && fulfillmentStatus === 'delivered') current.paymentStatus = 'paid'
-      await current.save({ session }); await orderEmailEvents(beforeEmail, current, session); return current
-    })
-  }
-  await audit(req, 'update', 'order', order._id); res.json({ order })
+  const input = z.object({ fulfillmentStatus: z.enum(['processing','shipped','delivered','cancelled']), trackingNumber: z.string().max(100).default('') }).strict().parse(req.body)
+  res.json({ order: await fulfillOrder(objectId.parse(req.params.id), input, req.user._id) })
 })
 router.get('/customers', async (req, res) => { const { page } = pagination.parse(req.query); const filter = { role: 'customer' }; const total = await User.countDocuments(filter); res.json({ items: await User.find(filter).select('name email phone status createdAt').sort({ createdAt: -1 }).skip((page - 1) * 20).limit(20).lean(), page, total, pages: Math.ceil(total / 20) }) })
 router.patch('/customers/:id', async (req, res) => { const { status } = z.object({ status: z.enum(['active', 'suspended']) }).strict().parse(req.body); const item = await User.findOneAndUpdate({ _id: objectId.parse(req.params.id), role: 'customer' }, { $set: { status }, $inc: { sessionVersion: 1 } }, { new: true }).select('name email status'); if (!item) throw fail(404, 'Customer not found'); await audit(req, 'update', 'customer', item._id); res.json({ item }) })
@@ -122,16 +97,50 @@ for (const [resource, Model] of [['subscribers', Subscriber], ['messages', Conta
   router.get(`/${resource}`, async (req, res) => { const { page } = pagination.parse(req.query); const total = await Model.countDocuments(); res.json({ items: await Model.find().sort({ createdAt: -1 }).skip((page - 1) * 20).limit(20).lean(), page, total, pages: Math.ceil(total / 20) }) })
 }
 router.patch('/messages/:id', async (req, res) => { await ContactMessage.updateOne({ _id: objectId.parse(req.params.id) }, { $set: { status: 'read' } }); res.json({ message: 'Marked as read' }) })
+router.get('/pages/by-slug/:slug', async (req, res) => {
+  const item = await Page.findOne({ slug: slug.parse(req.params.slug) }).lean()
+  res.set('Cache-Control', 'no-store').json({ item })
+})
 for (const [resource, [Model, schema]] of Object.entries(resources)) {
-  router.get(`/${resource}`, async (req, res) => { const { page } = pagination.parse(req.query); const total = await Model.countDocuments(); res.json({ items: await Model.find().sort({ updatedAt: -1 }).skip((page - 1) * 20).limit(20).lean(), page, total, pages: Math.ceil(total / 20) }) })
+  const isArticle = ['blogs', 'pages'].includes(resource)
+  router.get(`/${resource}`, async (req, res) => {
+    const input = (isArticle ? pagination.extend({ status: z.union([status, z.literal('')]).default('') }) : pagination).parse(req.query)
+    const filter = isArticle ? {
+      ...(input.status && { status: input.status }),
+      ...(input.search && { title: { $regex: input.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }),
+    } : {}
+    const [items, total] = await Promise.all([
+      Model.find(filter).sort({ updatedAt: -1, _id: -1 }).skip((input.page - 1) * 20).limit(20).lean(),
+      Model.countDocuments(filter),
+    ])
+    res.set('Cache-Control', 'no-store').json({ items, page: input.page, total, pages: Math.ceil(total / 20) })
+  })
   const save = async (req, res) => {
     const input = schema.parse(req.body)
-    if (['blogs', 'pages'].includes(resource)) { input.author = req.user._id; if (input.status === 'published') input.publishedAt = new Date() }
+    const updatedAt = input.updatedAt
+    if (isArticle) {
+      delete input.updatedAt
+      const previous = req.params.id ? await Model.findById(objectId.parse(req.params.id)).select('publishedAt').lean() : null
+      if (req.params.id && !previous) throw fail(404, 'Entry not found')
+      input.author = req.user._id
+      if (input.status === 'published' && !previous?.publishedAt) input.publishedAt = new Date()
+    }
     if (resource === 'categories' && req.params.id) {
       const old = await Category.findById(objectId.parse(req.params.id))
       if (old && old.slug !== input.slug && await Product.exists({ category: old.slug })) throw fail(409, 'This category has products. Keep its slug or move the products first.')
     }
-    const item = req.params.id ? await Model.findByIdAndUpdate(objectId.parse(req.params.id), { $set: input }, { new: true, runValidators: true }) : await Model.create(input)
+    let item
+    try {
+      item = req.params.id
+        ? isArticle && updatedAt
+          ? await Model.findOneAndUpdate({ _id: objectId.parse(req.params.id), updatedAt: new Date(updatedAt) }, { $set: input }, { new: true, runValidators: true })
+          : await Model.findByIdAndUpdate(objectId.parse(req.params.id), { $set: input }, { new: true, runValidators: true })
+        : await Model.create(input)
+    } catch (error) {
+      if (isArticle && error.code === 11000) throw fail(409, 'This page address is already in use. Choose another slug, or edit the existing entry.')
+      throw error
+    }
+    if (!item && isArticle && updatedAt) throw fail(409, 'This content changed. Reload it before saving again.')
     if (!item) throw fail(404, 'Entry not found'); await audit(req, 'save', resource, item._id); res.json({ item })
   }
   router.post(`/${resource}`, save); router.put(`/${resource}/:id`, save)

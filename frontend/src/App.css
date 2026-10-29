@@ -217,10 +217,10 @@
 
 :root {
     --ink: #292421;
-    --muted: #827a73;
+    --muted: #6f6862;
     --paper: #fffdf9;
     --rose: #ead9d3;
-    --accent: #b46160;
+    --accent: #a25554;
     --line: #ded8d2
 }
 
@@ -1817,3 +1817,5 @@ h3 {
         margin-top: 35px
     }
 }
+/* Reserve space while dynamic content arrives. */
+.storefront-loading { min-height: 200vh; padding: 3rem 5vw; }

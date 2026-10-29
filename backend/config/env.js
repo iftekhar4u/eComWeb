@@ -23,6 +23,9 @@ const envSchema = z.object({
   MAIL_FROM: optionalText(z.string().email().max(254)),
   MAIL_SUPPORT: optionalText(z.string().email().max(254)),
   CLIENT_URL: z.string().url().default('http://localhost:5173'),
+  PAYMENT_ENCRYPTION_KEY: optionalText(z.string().min(32)),
+  PAYMENT_PUBLIC_ORIGIN: optionalText(z.string().url()),
+  RAZORPAY_ACCOUNT_ID: optionalText(z.string().regex(/^acc_[a-zA-Z0-9]+$/)),
   RAZORPAY_KEY_ID: optionalText(z.string().regex(/^rzp_(test|live)_[a-zA-Z0-9]+$/)),
   RAZORPAY_KEY_SECRET: optionalText(z.string().min(1)),
   RAZORPAY_WEBHOOK_SECRET: optionalText(z.string().min(16)),
@@ -37,6 +40,10 @@ const envSchema = z.object({
 
 export function getConfig(env = process.env) {
   const parsed = envSchema.parse(env)
+  if (parsed.PAYMENT_PUBLIC_ORIGIN) {
+    const origin = new URL(parsed.PAYMENT_PUBLIC_ORIGIN)
+    if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/' || parsed.NODE_ENV === 'production' && origin.protocol !== 'https:') throw new Error('PAYMENT_PUBLIC_ORIGIN must be a trusted origin without credentials, path or query; production requires HTTPS.')
+  }
   if (parsed.NODE_ENV === 'development') {
     if (parsed.MONGO_URI) parsed.MONGO_DEV_URI = parsed.MONGO_URI
     parsed.MONGO_URI = parsed.MONGO_DEV_URI
@@ -44,6 +51,15 @@ export function getConfig(env = process.env) {
   if (parsed.NODE_ENV === 'test') parsed.MONGO_URI = parsed.MONGO_TEST_URI
   if (parsed.NODE_ENV === 'production' && (!parsed.MONGO_URI || !parsed.SESSION_SECRET || !parsed.MFA_ENCRYPTION_KEY)) {
     throw new Error('MONGO_URI, SESSION_SECRET, and MFA_ENCRYPTION_KEY are required in production')
+  }
+  if (parsed.NODE_ENV === 'production') {
+    const origin = new URL(parsed.CLIENT_URL)
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/') throw new Error('CLIENT_URL must be the public HTTPS origin, without credentials, path or query.')
+    for (const name of ['SESSION_SECRET', 'MFA_ENCRYPTION_KEY', 'EMAIL_ENCRYPTION_KEY', 'PAYMENT_ENCRYPTION_KEY']) {
+      if (parsed[name] && /replace[-_ ]?with|change[-_ ]?me|your[-_ ]?(secret|key)/i.test(parsed[name])) throw new Error(`${name} still contains an example value. Preserve the original stable secret for an existing database.`)
+    }
+    if (!/^mongodb(?:\+srv)?:\/\//.test(parsed.MONGO_URI)) throw new Error('MONGO_URI must be a MongoDB connection string.')
+    if (!parsed.INTEGRATIONS_DIRECTORY) throw new Error('INTEGRATIONS_DIRECTORY must point to persistent private storage in production.')
   }
   if (parsed.NODE_ENV !== 'test' && !parsed.MONGO_URI) {
     throw new Error('MONGO_URI is required outside the test environment')

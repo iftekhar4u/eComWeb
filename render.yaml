@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: aurelia
+    runtime: node
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: npm --prefix frontend ci --include=dev --no-audit --no-fund && npm --prefix backend ci --omit=dev --no-audit --no-fund && npm run build
+    startCommand: npm run deploy:check && npm start
+    healthCheckPath: /readyz
+    disk:
+      name: aurelia-integrations
+      mountPath: /var/data/aurelia
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: INTEGRATIONS_DIRECTORY
+        value: /var/data/aurelia
+      - key: CLIENT_URL
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: MFA_ENCRYPTION_KEY
+        sync: false
+      - key: PAYMENT_PUBLIC_ORIGIN
+        sync: false
+      - key: PAYMENT_ENCRYPTION_KEY
+        sync: false

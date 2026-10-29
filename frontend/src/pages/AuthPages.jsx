@@ -1,10 +1,12 @@
+import '../auth-overrides.css'
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FiEye, FiEyeOff } from "react-icons/fi";
 import { FcGoogle } from "react-icons/fc";
 import { useAuth } from "../context/AuthContext";
+import { EmailAction, emailAction } from '../email/EmailActions'
 export function Login() {
-  const [form, setForm] = useState({ email: "", password: "" });
+  const [form, setForm] = useState({ email: "", password: "", remember: false });
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const { login, linkGoogle, loading, googleEnabled, startGoogleLogin } = useAuth();
@@ -16,7 +18,8 @@ export function Login() {
     e.preventDefault();
     setError("");
     try {
-      await login(form);
+      const signedIn = await login(form);
+      if (signedIn.role === 'admin') { navigate('/admin'); return; }
       if (googleError === "google-account-link-required") await linkGoogle();
       navigate(returnTo);
     } catch (err) {
@@ -27,6 +30,7 @@ export function Login() {
   };
   return (
     <AuthShell title="Welcome back." subtitle="Your ritual is waiting.">
+      {new URLSearchParams(location.search).get("passwordChanged") && <p role="status">Password changed. Sign in with your new password.</p>}
       <form className="auth-form" onSubmit={submit}>
         <label>
           Email
@@ -58,7 +62,7 @@ export function Login() {
         {(error || googleError) && <p className="form-error">{error || googleErrorMessage(googleError)}</p>}
         <div className="form-options">
           <label className="check-label">
-            <input type="checkbox" /> Remember me
+            <input type="checkbox" checked={form.remember} onChange={e => setForm({ ...form, remember: e.target.checked })} /> Remember me
           </label>
           <Link to="/forgot-password">Forgot password?</Link>
         </div>
@@ -96,11 +100,13 @@ export function Signup() {
     try {
       const registrationDetails = { name: form.name, email: form.email, password: form.password };
       await signup(registrationDetails);
-      navigate("/shop");
+      navigate(getSafeReturnTo(new URLSearchParams(location.search).get("returnTo")));
     } catch (err) {
       setError(err.response?.data?.message || "Unable to create account.");
     }
   };
+  const action = emailAction(location.hash);
+  if (action && ['verify','resend'].includes(action.kind)) return <EmailAction key={location.hash} {...action}/>;
   return (
     <AuthShell
       title="Begin your ritual."
@@ -163,7 +169,7 @@ export function Signup() {
   );
 }
 function getSafeReturnTo(value) {
-  return value && value.startsWith('/') && !value.startsWith('//') ? value : '/shop';
+  return value && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\') ? value : '/shop';
 }
 function googleErrorMessage(code) {
   if (code === "google-account-link-required") return "This email already has an Aurelia account. Sign in with that account before linking Google."

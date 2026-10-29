@@ -103,7 +103,14 @@ export const Wishlist = model('Wishlist', wishlistSchema)
 const addressSnapshotSchema = new Schema({ name: { type: String, required: true, maxlength: 100 }, line1: { type: String, required: true, maxlength: 200 }, line2: { type: String, maxlength: 200 }, city: { type: String, required: true, maxlength: 100 }, state: { type: String, required: true, maxlength: 100 }, postalCode: { type: String, required: true, maxlength: 20 }, country: { type: String, required: true, maxlength: 2 }, phone: { type: String, maxlength: 30 } }, { _id: false, strict: 'throw' })
 const orderItemSchema = new Schema({ variant: id(), sku: { type: String, required: true, maxlength: 64 }, name: { type: String, required: true, maxlength: 160 }, quantity, unitPricePaise: money, lineTotalPaise: money }, { _id: false, strict: 'throw' })
 const orderSchema = new Schema({
-  refundedPaise: { ...money, default: 0 }, requestHash: { type: String, maxlength: 64 }, expiresAt: Date, inventoryStatus: state(['reserved', 'committed', 'released', 'review'], 'reserved'), paymentMethod: state(['razorpay', 'cod'], 'razorpay'), trackingNumber: { type: String, maxlength: 100 },
+  placedAt: { type: Date, immutable: true }, cancellationDeadline: { type: Date, immutable: true }, policyRevision: Number,
+  paymentEnvironment: { type: String, enum: ['sandbox', 'live', 'unknown'], default: 'unknown' }, accountId: String, credentialProfileId: String,
+  codFeePaise: { ...money, default: 0 }, capturedPaise: { ...money, max: 2147483647, default: 0 }, refundPendingPaise: { ...money, max: 2147483647, default: 0 },
+  codCollectedPaise: { ...money, default: 0 }, codRemittedPaise: { ...money, default: 0 }, codReimbursedPaise: { ...money, default: 0 },
+  legacyCollectionUnverified: { type: Boolean, default: false }, cancelledAt: Date, cancelledBy: Schema.Types.ObjectId, cancellationReason: { type: String, maxlength: 300 },
+  financialRevision: { type: Number, default: 0 }, cartVersion: Number, cartCleanedAt: Date, returnStatus: { type: String, enum: ['none', 'failed_delivery', 'refused', 'returning', 'received'], default: 'none' },
+
+  refundedPaise: { ...money, max: 2147483647, default: 0 }, requestHash: { type: String, maxlength: 64 }, expiresAt: Date, inventoryStatus: state(['reserved', 'committed', 'released', 'review'], 'reserved'), paymentMethod: state(['razorpay', 'cod'], 'razorpay'), trackingNumber: { type: String, maxlength: 100 },
   orderNumber: { type: String, required: true, uppercase: true, maxlength: 40 }, customer: id(), items: { type: [orderItemSchema], required: true, validate: (value) => value.length >= 1 && value.length <= 100 }, deliveryAddress: { type: addressSnapshotSchema, required: true }, subtotalPaise: money, discountPaise: { ...money, default: 0, required: true }, shippingPaise: { ...money, default: 0, required: true }, totalPaise: money, currency: { type: String, enum: ['INR'], default: 'INR' }, paymentStatus: state(['pending', 'authorized', 'paid', 'failed', 'refunded'], 'pending'), fulfillmentStatus: state(['pending', 'processing', 'shipped', 'delivered', 'cancelled'], 'pending'), idempotencyKey: { type: String, required: true, maxlength: 128 },
 }, timestamps)
 orderSchema.index({ orderNumber: 1 }, { unique: true })
@@ -111,17 +118,21 @@ orderSchema.index({ customer: 1, createdAt: -1 })
 orderSchema.index({ customer: 1, idempotencyKey: 1 }, { unique: true })
 export const Order = model('Order', orderSchema)
 
-const paymentSchema = new Schema({ providerOrderId: { type: String, maxlength: 200 }, initializationStartedAt: Date, order: id(), provider: { type: String, enum: ['disabled', 'sandbox', 'razorpay'], required: true }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerPaymentId: { type: String, maxlength: 200 }, amountPaise: money, currency: { type: String, enum: ['INR'], default: 'INR' }, status: state(['created', 'pending', 'succeeded', 'failed', 'refunded'], 'created') }, timestamps)
+const paymentSchema = new Schema({ accountId: String, credentialProfileId: String, providerOrderId: { type: String, maxlength: 200 }, initializationStartedAt: Date, order: id(), provider: { type: String, enum: ['disabled', 'sandbox', 'razorpay'], required: true }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerPaymentId: { type: String, maxlength: 200 }, amountPaise: money, currency: { type: String, enum: ['INR'], default: 'INR' }, status: state(['created', 'pending', 'succeeded', 'failed', 'refunded'], 'created') }, timestamps)
 paymentSchema.index({ provider: 1, environment: 1, providerPaymentId: 1 }, { unique: true, partialFilterExpression: { providerPaymentId: { $type: 'string' } } })
 paymentSchema.index({ order: 1 }, { unique: true })
 paymentSchema.index({ providerOrderId: 1 }, { unique: true, partialFilterExpression: { providerOrderId: { $type: 'string' } } })
 export const Payment = model('Payment', paymentSchema)
 
-const paymentEventSchema = new Schema({ provider: { type: String, required: true, maxlength: 50 }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerEventId: { type: String, required: true, maxlength: 200 }, payment: { type: Schema.Types.ObjectId, ref: 'Payment' }, payloadHash: { type: String, required: true, maxlength: 128 }, state: state(['received', 'processed', 'ignored', 'failed'], 'received'), processedAt: Date }, timestamps)
-paymentEventSchema.index({ provider: 1, environment: 1, providerEventId: 1 }, { unique: true })
+const paymentEventSchema = new Schema({
+  accountId: { type: String, maxlength: 100 }, credentialProfileId: { type: String, maxlength: 80 }, eventKind: { type: String, maxlength: 80 },
+  remotePaymentId: { type: String, maxlength: 200 }, remoteRefundId: { type: String, maxlength: 200 }, remoteOrderId: { type: String, maxlength: 200 },
+  attempts: { type: Number, default: 0 }, nextAttemptAt: { type: Date, default: Date.now }, leaseUntil: Date, leaseToken: String, failureCode: String,
+  provider: { type: String, required: true, maxlength: 50 }, environment: { type: String, enum: ['sandbox', 'live'], required: true }, providerEventId: { type: String, required: true, maxlength: 200 }, payment: { type: Schema.Types.ObjectId, ref: 'Payment' }, payloadHash: { type: String, required: true, maxlength: 128 }, state: state(['received', 'processing', 'processed', 'ignored', 'failed', 'review'], 'received'), processedAt: Date }, timestamps)
+paymentEventSchema.index({ provider: 1, accountId: 1, environment: 1, providerEventId: 1 }, { unique: true })
 export const PaymentEvent = model('PaymentEvent', paymentEventSchema)
 
-const reservationSchema = new Schema({ order: id(), variant: id(), quantity, expiresAt: { type: Date, required: true }, state: state(['active', 'released', 'consumed', 'expired'], 'active'), releasedAt: Date }, timestamps)
+const reservationSchema = new Schema({ order: id(), variant: id(), quantity, expiresAt: { type: Date, required: true }, state: state(['active', 'released', 'consumed', 'expired', 'restored'], 'active'), releasedAt: Date }, timestamps)
 // Active reservations must survive until the reconciliation worker releases stock.
 reservationSchema.index({ state: 1, expiresAt: 1 })
 reservationSchema.index({ order: 1, variant: 1 }, { unique: true })

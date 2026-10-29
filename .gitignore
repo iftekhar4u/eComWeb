@@ -1,0 +1,26 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+!.env.sample
+*.log
+backups/
+.mongo-data/
+.DS_Store
+
+dist-admin/
+
+# Backend-only encrypted integration settings and transient locks
+.private/
+
+**/node_modules/
+
+**/test-results/
+**/playwright-report/
+**/.fixture-integrations/
+
+# Local deployment secrets and generated reports
+deploy/*.env
+reports/

@@ -21,6 +21,15 @@ router.get('/storefront', async (_req, res) => {
   ])
   res.json({ categories, settings, sections: homepage?.sections.filter(s => s.visible).sort((a,b) => a.order - b.order) || [], blogs, collections })
 })
+router.get('/blogs', async (req, res) => {
+  const { page } = z.object({ page: z.coerce.number().int().min(1).max(10000).default(1) }).strict().parse(req.query)
+  const filter = { status: 'published' }
+  const [items, total] = await Promise.all([
+    BlogPost.find(filter).sort({ publishedAt: -1, _id: -1 }).skip((page - 1) * 12).limit(12).select('title slug excerpt image seo').lean(),
+    BlogPost.countDocuments(filter),
+  ])
+  res.json({ items, total, page, pages: Math.ceil(total / 12) })
+})
 router.get('/blogs/:slug', async (req, res) => { const post = await BlogPost.findOne({ slug: req.params.slug, status: 'published' }).select('title slug excerpt image content seo').lean(); if (!post) throw fail(404, 'Article not found'); res.json(post) })
 router.get('/pages/:slug', async (req, res) => { const page = await Page.findOne({ slug: req.params.slug, status: 'published' }).select('title slug content seo').lean(); if (!page) throw fail(404, 'Page not found'); res.json(page) })
 router.get('/collections/:slug', async (req, res) => { const collection = await ProductCollection.findOne({ slug: req.params.slug, status: 'published' }).lean(); if (!collection) throw fail(404, 'Collection not found'); res.json({ collection, products: await findPublicProducts(collection.products) }) })
