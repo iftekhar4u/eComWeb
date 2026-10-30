@@ -51,8 +51,8 @@ export default function Layout({ children }) {
               </Link>
             ))}
             <Link to="/collections">Collections</Link>
-            <Link to="/blog">Blog</Link>
-            <Link to="/pages/about">About</Link>
+            {/* <Link to="/blog">Blog</Link>
+            <Link to="/pages/about">About</Link> */}
           </nav>
           <div className="nav-actions">
             <form className="search-box desktop-search" onSubmit={e => { e.preventDefault(); navigate(`/shop?search=${encodeURIComponent(query)}`); }}>
