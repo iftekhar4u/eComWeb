@@ -1,4 +1,4 @@
-# AURELIA — WhatsApp, Cloudinary and MongoDB Atlas update
+# AURELIA — WhatsApp, cloudinary and MongoDB Atlas update
 
 Prepared for the supplied `InternProject(4).zip` on 17 October 2026.
 Read this alongside the existing README files. It documents the new integrations;
@@ -10,11 +10,11 @@ remain in place.
 | Task | Delivered behaviour | Where to manage it |
 | --- | --- | --- |
 | WhatsApp enquiries | Green floating WhatsApp button at the bottom-right of store pages; opens a chat with an editable message. On mobile it sits above the existing bottom navigation. | Admin → Settings → WhatsApp enquiries |
-| Cloudinary | Encrypted backend credentials, connection test, signed backend image uploads, and upload controls beside existing image URL fields. | Admin → Settings → Cloudinary images; Products, Categories and Storefront editors |
+| cloudinary | Encrypted backend credentials, connection test, signed backend image uploads, and upload controls beside existing image URL fields. | Admin → Settings → cloudinary images; Products, Categories and Storefront editors |
 | MongoDB Atlas | Encrypted saved URI, connection/transaction check, separate selection for the next backend restart, migration helper, and recovery to the original environment database. | Admin → Settings → MongoDB Atlas |
 
 The features start unconfigured/disabled. No phone number or provider credentials
-were invented. No Cloudinary upload or Atlas data migration was performed against
+were invented. No cloudinary upload or Atlas data migration was performed against
 a real account while preparing this update.
 
 **The source ZIP does not contain your running MongoDB database.** Existing data
@@ -82,7 +82,7 @@ previous project ZIP. Use the project's existing Node 24 environment.
 6. Save and refresh a storefront page, or return focus to the storefront tab.
 
 The public endpoint exposes only the enabled button's number, message, label and
-link preference. It never includes Cloudinary or MongoDB fields. Query strings,
+link preference. It never includes cloudinary or MongoDB fields. Query strings,
 URL fragments, order pages and account pages are not added to a message.
 
 The widget is part of the existing storefront layout, so it appears on pages
@@ -91,17 +91,27 @@ screens keep their original layouts. A missing/disabled configuration or failed
 settings request hides the widget without blocking the store. A number must
 actually be registered with WhatsApp; the application checks its format only.
 
-## 4. Configure Cloudinary and upload images
+## 4. Configure cloudinary and upload images
 
-1. Create/open your Cloudinary product environment.
+You can configure Cloudinary either with the backend environment variables or
+from **Admin → Settings → cloudinary images**. For environment-based setup, set
+`CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, and
+optionally `CLOUDINARY_FOLDER` (defaults to `aurelia`) in `backend/.env` or your
+hosting provider's backend environment. Set all three credentials together.
+Never put these values in frontend variables or source control. Complete
+environment credentials enable uploads by default; once Cloudinary credentials
+are saved in Admin settings, those encrypted settings take precedence.
+
+1. Create/open your cloudinary product environment.
 2. Copy its **Cloud name**, **API key**, and **API secret** from its console.
-3. Open **Admin → Settings → Cloudinary images**.
-4. Enter the credentials, choose a folder such as `aurelia`, enable uploads, and
-   enter your current administrator password.
-5. Click **Test Cloudinary connection**, then **Save Cloudinary settings**.
+3. Configure the four `CLOUDINARY_*` variables in the backend environment, or
+   enter the credentials under **Admin → Settings → cloudinary images**.
+4. If configuring in Admin, choose a folder such as `aurelia`, enable uploads,
+   and enter your current administrator password.
+5. Click **Test cloudinary connection**, then **Save cloudinary settings**.
    Saving an enabled configuration also tests it before applying the change.
 6. Open an existing product, category or homepage section. Select an
-   image using its Cloudinary upload control. The resulting HTTPS URL fills the
+   image using its cloudinary upload control. The resulting HTTPS URL fills the
    existing image field. **Save the entry** (and publish the homepage when
    appropriate) to make it visible on the site.
 
@@ -112,9 +122,9 @@ append one URL per upload and stop at the existing twelve-image limit. Existing
 URL fields are still editable. Existing image URLs are not rewritten or moved.
 
 Supported uploads: JPEG, PNG, WebP and GIF, maximum **5 MiB per image**. The server
-checks MIME type and file signatures; Cloudinary then processes the actual image.
+checks MIME type and file signatures; cloudinary then processes the actual image.
 SVG, arbitrary URLs and other file types are not accepted by the upload endpoint.
-One file is sent at a time; credentials never pass to Cloudinary from the browser.
+One file is sent at a time; credentials never pass to cloudinary from the browser.
 
 The server signs the upload parameters with SHA-256, uses HTTPS, assigns a unique
 asset ID, and disables overwriting an existing asset. Provider errors are
@@ -124,8 +134,8 @@ No unsigned upload preset is required.
 Blank API key/secret fields preserve the saved values. They are never filled
 back into the form. Change them by entering replacement values and saving.
 Disabling uploads keeps saved credentials and existing images available. Removing
-an image from an editor does not delete the Cloudinary asset; manage unused assets
-in Cloudinary. An upload followed by cancelling an edit can leave an unused asset.
+an image from an editor does not delete the cloudinary asset; manage unused assets
+in cloudinary. An upload followed by cancelling an edit can leave an unused asset.
 
 ## 5. Configure Atlas and migrate existing data
 
@@ -326,7 +336,7 @@ include `currentPassword`; Atlas activation requires `confirmMigration: true`.
 | `frontend/src/integrations/WhatsAppButton.jsx` | Storefront click-to-chat component |
 | `frontend/src/integrations/whatsapp.css` | Scoped button styles and mobile/safe-area positioning |
 | `frontend/src/admin-ready/IntegrationSettings.jsx` | Three new cards inside existing Settings |
-| `frontend/src/admin-ready/CloudinaryUpload.jsx` | Reusable file upload control filling existing URL fields |
+| `frontend/src/admin-ready/cloudinaryUpload.jsx` | Reusable file upload control filling existing URL fields |
 | `README_INTEGRATIONS.md` | This setup, architecture, change and validation record |
 
 ### Minimal edits to existing files
@@ -380,7 +390,7 @@ node admin-tools/build.mjs
   no original source file was removed and the original `.env` was not edited.
 
 Provider calls and database migration in automated tests use isolated doubles;
-these checks do **not** prove connectivity to your real Cloudinary account or
+these checks do **not** prove connectivity to your real cloudinary account or
 Atlas cluster. No real credentials were used, no real customer records were
 modified, and no website was deployed. Use the panel's connection tests and follow
 the migration checklist on your machine before production use.
@@ -388,13 +398,13 @@ the migration checklist on your machine before production use.
 ## 10. Official references
 
 - WhatsApp click-to-chat: https://faq.whatsapp.com/5913398998672934
-- Cloudinary Upload API: https://cloudinary.com/documentation/image_upload_api_reference
-- Cloudinary authentication signatures: https://cloudinary.com/documentation/authentication_signatures
-- Cloudinary Admin API / ping: https://cloudinary.com/documentation/admin_api
+- cloudinary Upload API: https://cloudinary.com/documentation/image_upload_api_reference
+- cloudinary authentication signatures: https://cloudinary.com/documentation/authentication_signatures
+- cloudinary Admin API / ping: https://cloudinary.com/documentation/admin_api
 - Atlas connection prerequisites: https://www.mongodb.com/docs/atlas/connect-to-database-deployment/
 - Atlas import with Database Tools: https://www.mongodb.com/docs/atlas/import/mongorestore/
 
 The implementation uses the documented click-to-chat URL, server-side signed
-Cloudinary uploads, and the MongoDB driver with Atlas IP access/database-user
+cloudinary uploads, and the MongoDB driver with Atlas IP access/database-user
 requirements. Provider account creation, billing and network permissions remain
 managed in the respective provider consoles.

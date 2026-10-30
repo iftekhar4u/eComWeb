@@ -88,12 +88,30 @@ export function publicWhatsApp(settings) {
     : { enabled: false }
 }
 
+export function resolveCloudinary(settings, runtimeConfig = {}) {
+  const saved = settings.cloudinary || defaultSettings().cloudinary
+  if (saved.apiKey || saved.apiSecret) return saved
+  return {
+    enabled: Boolean(runtimeConfig.CLOUDINARY_CLOUD_NAME && runtimeConfig.CLOUDINARY_API_KEY && runtimeConfig.CLOUDINARY_API_SECRET),
+    cloudName: runtimeConfig.CLOUDINARY_CLOUD_NAME || saved.cloudName,
+    apiKey: runtimeConfig.CLOUDINARY_API_KEY || '',
+    apiSecret: runtimeConfig.CLOUDINARY_API_SECRET || '',
+    folder: runtimeConfig.CLOUDINARY_FOLDER || saved.folder || 'aurelia',
+  }
+}
+
 export function adminSettings(settings, runtimeConfig) {
   const desired = runtimeConfig.INTEGRATIONS_IGNORE_DATABASE ? runtimeConfig.BOOTSTRAP_MONGO_URI || runtimeConfig.MONGO_URI : settings.mongodb.activeUri || runtimeConfig.BOOTSTRAP_MONGO_URI || runtimeConfig.MONGO_URI
+  const cloudinary = resolveCloudinary(settings, runtimeConfig)
+  const cloudinarySource = settings.cloudinary.apiKey || settings.cloudinary.apiSecret
+    ? 'admin'
+    : runtimeConfig.CLOUDINARY_CLOUD_NAME && runtimeConfig.CLOUDINARY_API_KEY && runtimeConfig.CLOUDINARY_API_SECRET
+      ? 'environment'
+      : 'admin'
   return {
     revision: settings.revision,
     whatsapp: settings.whatsapp,
-    cloudinary: { enabled: settings.cloudinary.enabled, cloudName: settings.cloudinary.cloudName, folder: settings.cloudinary.folder, apiKeySaved: Boolean(settings.cloudinary.apiKey), apiSecretSaved: Boolean(settings.cloudinary.apiSecret) },
+    cloudinary: { enabled: cloudinary.enabled, cloudName: cloudinary.cloudName, folder: cloudinary.folder, source: cloudinarySource, apiKeySaved: Boolean(cloudinary.apiKey), apiSecretSaved: Boolean(cloudinary.apiSecret) },
     mongodb: {
       uriSaved: Boolean(settings.mongodb.uri),
       atlasSelected: Boolean(settings.mongodb.activeUri),

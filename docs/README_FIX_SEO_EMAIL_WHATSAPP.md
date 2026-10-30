@@ -2,7 +2,7 @@
 
 Reviewed against the latest uploaded `InternProject(4).zip` on 17 October 2026.
 This patch is for that project version. It restores the existing features alongside
-the WhatsApp, Cloudinary and Atlas additions.
+the WhatsApp, cloudinary and Atlas additions.
 
 ## What caused the errors
 
@@ -97,12 +97,12 @@ configuration. The restored worker processes queued jobs when delivery is enable
 | Update | `backend/config/env.js` | Preserve email/SMTP defaults and the dedicated email encryption key during configuration parsing. |
 | Update | `backend/package.json` | Restore the exact Nodemailer 10.0.15 dependency already in the supplied lockfile. |
 | Update | `backend/.env.example` | Document optional email defaults without changing the real environment. |
-| Update | `frontend/src/admin-ready/ExistingEditors.jsx` | Restore the existing SEO fields and include them in saves while retaining Cloudinary upload controls. |
+| Update | `frontend/src/admin-ready/ExistingEditors.jsx` | Restore the existing SEO fields and include them in saves while retaining cloudinary upload controls. |
 | Add | `backend/admin-ready/tests/module-wiring.test.js` | Check SEO, Email and WhatsApp through the actual assembled Express app, plus email configuration parsing. |
 | Add | `README_FIX_SEO_EMAIL_WHATSAPP.md` | Explain the diagnosis, repair, file list, setup and verification. |
 
 All other source files and all existing CSS files remain unchanged. The storefront,
-admin navigation, SEO/Email screens, WhatsApp icon, Cloudinary controls and Atlas
+admin navigation, SEO/Email screens, WhatsApp icon, cloudinary controls and Atlas
 settings retain their existing designs. The shared editor regains its pre-existing
 SEO section; this is a restoration of the earlier feature.
 
@@ -117,7 +117,7 @@ SEO section; this is a restoration of the earlier feature.
 - The edited JSX has no lint errors. Its existing state-in-effect warning remains
   in the unrelated store settings form.
 - Browser checks with controlled local API fixtures pass for SEO/Email loading
-  and saving, product saves with SEO and Cloudinary controls, encoded WhatsApp
+  and saving, product saves with SEO and cloudinary controls, encoded WhatsApp
   links, mobile placement, hiding the disabled button and absence of JavaScript
   errors. These checks do not send WhatsApp messages or external emails.
 

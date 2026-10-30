@@ -67,8 +67,8 @@ Ab yeh command bhi admin selection apply karke `host`, `database`, `atlas`, `pro
 ## Existing data aur files
 
 - Backup/restore ek time ki copy thi. Uske baad local database mein hue changes automatically Atlas mein merge nahi hote. Agar aise records hain toh original local database aur backup sambhal kar rakho; populated Atlas par dobara blind restore ya `--drop` mat chalao. Pehle missing records/edits compare karne honge.
-- Product/category/user/order/content documents MongoDB mein hain. Normal local image files MongoDB dump ka part nahi hain; is project ke Cloudinary integration se upload hui images Cloudinary par aur unke URLs MongoDB mein rehte hain.
-- Atlas connection credentials aur WhatsApp/Cloudinary integration configuration encrypted `backend/.private/integrations.enc` file mein hain. Unhe MongoDB connect hone se pehle read karna hota hai. Future deployment par isi private file aur original encryption key ko securely preserve karna zaroori hai.
+- Product/category/user/order/content documents MongoDB mein hain. Normal local image files MongoDB dump ka part nahi hain; is project ke cloudinary integration se upload hui images cloudinary par aur unke URLs MongoDB mein rehte hain.
+- Atlas connection credentials aur WhatsApp/cloudinary integration configuration encrypted `backend/.private/integrations.enc` file mein hain. Unhe MongoDB connect hone se pehle read karna hota hai. Future deployment par isi private file aur original encryption key ko securely preserve karna zaroori hai.
 - Chat mein share hua database password rotate karke saved connection update karo. Existing `MFA_ENCRYPTION_KEY` ko randomly replace mat karna: usse saved integrations/authenticator decrypt nahi honge.
 
 ## Patch aur verification

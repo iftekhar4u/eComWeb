@@ -5,10 +5,10 @@ import multer from 'multer'
 import { rateLimit } from 'express-rate-limit'
 import User from '../models/User.js'
 import { protect, requireAdmin } from '../middleware/authMiddleware.js'
-import { adminSettings, publicWhatsApp, integrationError } from './store.js'
+import { adminSettings, publicWhatsApp, integrationError, resolveCloudinary } from './store.js'
 import { testAtlas, validateAtlasUri } from './atlas.js'
 import { readDatabaseStatus } from './database-status.js'
-import { testCloudinary, uploadImage, MAX_IMAGE_BYTES } from './cloudinary.js'
+import { testcloudinary, uploadImage, MAX_IMAGE_BYTES } from './cloudinary.js'
 
 const revision = z.number().int().nonnegative()
 const password = z.string().min(1).max(128)
@@ -28,7 +28,7 @@ function checkRevision(settings, expected) {
   if (settings.revision !== expected) throw integrationError(409, 'Integration settings changed. Reload the settings page before saving.')
 }
 
-export function integrationRoutes({ store, config, cloudTest = testCloudinary, atlasTest = testAtlas, imageUpload = uploadImage, databaseStatus = readDatabaseStatus }) {
+export function integrationRoutes({ store, config, cloudTest = testcloudinary, atlasTest = testAtlas, imageUpload = uploadImage, databaseStatus = readDatabaseStatus }) {
   const router = Router()
   router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next() })
   router.use(protect, requireAdmin)
@@ -48,26 +48,27 @@ export function integrationRoutes({ store, config, cloudTest = testCloudinary, a
     await reauthenticate(req, input.currentPassword)
     const current = await store.read()
     checkRevision(current, input.revision)
-    const cloudinary = { enabled: input.enabled, cloudName: input.cloudName, folder: input.folder, apiKey: input.apiKey || current.cloudinary.apiKey, apiSecret: input.apiSecret || current.cloudinary.apiSecret }
+    const activeCloudinary = resolveCloudinary(current, config)
+    const cloudinary = { enabled: input.enabled, cloudName: input.cloudName, folder: input.folder, apiKey: input.apiKey || activeCloudinary.apiKey, apiSecret: input.apiSecret || activeCloudinary.apiSecret }
     return { input, cloudinary }
   }
   router.post('/cloudinary/test', sensitive, async (req, res) => {
     const { cloudinary } = await cloudCandidate(req)
     await cloudTest(cloudinary)
-    res.json({ message: 'Cloudinary connection verified. Save to apply these credentials.' })
+    res.json({ message: 'cloudinary connection verified. Save to apply these credentials.' })
   })
   router.put('/cloudinary', sensitive, async (req, res) => {
     const { input, cloudinary } = await cloudCandidate(req)
     if (cloudinary.enabled) await cloudTest(cloudinary)
     const value = await store.update(input.revision, req.user._id, 'cloudinary.save', current => ({ ...current, cloudinary }))
-    respond(res, value, 'Cloudinary settings saved. New uploads use these settings immediately.')
+    respond(res, value, 'cloudinary settings saved. New uploads use these settings immediately.')
   })
   router.post('/cloudinary/upload', uploads, (req, res, next) => upload(req, res, error => {
     if (error instanceof multer.MulterError) return next(integrationError(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400, error.code === 'LIMIT_FILE_SIZE' ? 'Images must be 5 MB or smaller.' : 'Choose exactly one image file.'))
     next(error)
   }), async (req, res) => {
     const settings = await store.read()
-    res.status(201).json(await imageUpload(settings.cloudinary, req.file))
+    res.status(201).json(await imageUpload(resolveCloudinary(settings, config), req.file))
   })
   async function atlasCandidate(req) {
     const input = atlasInput.parse(req.body)

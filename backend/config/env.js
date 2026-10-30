@@ -13,6 +13,10 @@ const envSchema = z.object({
   MONGO_TEST_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/aurelia_test'),
   SESSION_SECRET: z.string().min(32).optional(),
   MFA_ENCRYPTION_KEY: z.string().min(32).optional(),
+  CLOUDINARY_CLOUD_NAME: optionalText(z.string().trim().regex(/^[a-zA-Z0-9_-]{1,100}$/)),
+  CLOUDINARY_API_KEY: optionalText(z.string().trim().min(1).max(100)),
+  CLOUDINARY_API_SECRET: optionalText(z.string().trim().min(1).max(4096)),
+  CLOUDINARY_FOLDER: z.string().trim().min(1).max(100).regex(/^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/).default('aurelia'),
   EMAIL_ENABLED: z.preprocess(value => value === true || value === 'true', z.boolean()).default(false),
   EMAIL_ENCRYPTION_KEY: optionalText(z.string().min(32)),
   SMTP_HOST: optionalText(z.string().trim().max(253)),
@@ -68,6 +72,10 @@ export function getConfig(env = process.env) {
     throw new Error('GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL are required when Google auth is enabled')
   }
   if (Boolean(parsed.RAZORPAY_KEY_ID) !== Boolean(parsed.RAZORPAY_KEY_SECRET)) throw new Error('Set both Razorpay key ID and key secret, or leave both blank')
+  const cloudinaryCredentials = [parsed.CLOUDINARY_CLOUD_NAME, parsed.CLOUDINARY_API_KEY, parsed.CLOUDINARY_API_SECRET]
+  if (cloudinaryCredentials.some(Boolean) && !cloudinaryCredentials.every(Boolean)) {
+    throw new Error('Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET together, or leave them all blank')
+  }
   if (parsed.NODE_ENV === 'production' && parsed.RAZORPAY_KEY_ID && !parsed.RAZORPAY_WEBHOOK_SECRET) throw new Error('RAZORPAY_WEBHOOK_SECRET is required with production payments')
   return parsed
 }

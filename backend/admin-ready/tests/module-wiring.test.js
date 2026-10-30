@@ -81,6 +81,7 @@ test('email environment defaults and dedicated encryption key survive configurat
     MAIL_FROM: 'store@example.test', MAIL_SUPPORT: 'support@example.test',
     EMAIL_ENCRYPTION_KEY: 'isolated-dedicated-email-key-at-least-32-characters',
   })
+
   assert.equal(parsed.EMAIL_ENABLED, true)
   assert.equal(parsed.SMTP_SECURE, true)
   assert.equal(parsed.SMTP_PORT, 465)
@@ -90,6 +91,21 @@ test('email environment defaults and dedicated encryption key survive configurat
   assert.equal(parsed.MAIL_FROM, 'store@example.test')
   assert.equal(parsed.MAIL_SUPPORT, 'support@example.test')
   assert.equal(parsed.EMAIL_ENCRYPTION_KEY, 'isolated-dedicated-email-key-at-least-32-characters')
+})
+
+test('Cloudinary environment configuration accepts a complete set and rejects partial credentials', () => {
+  const parsed = getConfig({
+    NODE_ENV: 'test',
+    CLOUDINARY_CLOUD_NAME: 'env-cloud',
+    CLOUDINARY_API_KEY: 'env-key',
+    CLOUDINARY_API_SECRET: 'env-secret',
+    CLOUDINARY_FOLDER: 'aurelia/catalog',
+  })
+  assert.equal(parsed.CLOUDINARY_CLOUD_NAME, 'env-cloud')
+  assert.equal(parsed.CLOUDINARY_API_KEY, 'env-key')
+  assert.equal(parsed.CLOUDINARY_API_SECRET, 'env-secret')
+  assert.equal(parsed.CLOUDINARY_FOLDER, 'aurelia/catalog')
+  assert.throws(() => getConfig({ NODE_ENV: 'test', CLOUDINARY_CLOUD_NAME: 'env-cloud' }), /CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET together/)
 })
 
 test.after(async () => {

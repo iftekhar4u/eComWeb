@@ -64,7 +64,7 @@ That Linux validation run used the optional Chromium executable override and one
 
 The actual Render deployment and GitHub-hosted workflow have not run. Multi-instance scaling, endurance/peak traffic and external penetration testing were not performed.
 
-Online payment tests use controlled provider responses; real Razorpay capture/refund and webhook delivery, SMTP inbox delivery, Google OAuth, Cloudinary upload, live Atlas connectivity, host DNS/TLS and domain-specific URLs must be accepted on the deployment account. Follow `DEPLOYMENT.md` before opening real orders. No live transaction, provider message or customer database change was made.
+Online payment tests use controlled provider responses; real Razorpay capture/refund and webhook delivery, SMTP inbox delivery, Google OAuth, cloudinary upload, live Atlas connectivity, host DNS/TLS and domain-specific URLs must be accepted on the deployment account. Follow `DEPLOYMENT.md` before opening real orders. No live transaction, provider message or customer database change was made.
 
 ## Additional Windows verification — 29 October 2026
 

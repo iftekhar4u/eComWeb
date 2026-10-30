@@ -1888,7 +1888,7 @@ index 0000000..ca391ff
 +- Create/publish a disposable blog or About edit, reload, restart the service and verify persistence. Check actual images/content and mobile layout.
 +- Update saved SEO/email public URLs, logo URLs and canonicals from localhost/test domains. Check sitemap/robots. Database settings can override environment defaults.
 +- If Google sign-in is enabled, register `https://YOUR_DOMAIN/api/v1/auth/google/callback` in Google and `GOOGLE_CALLBACK_URL`; test login/account linking.
-+- Restore SMTP, Cloudinary and WhatsApp settings as used. Send email to an inbox you control, verify sender-domain authentication with the provider and test an admin image upload.
++- Restore SMTP, cloudinary and WhatsApp settings as used. Send email to an inbox you control, verify sender-domain authentication with the provider and test an admin image upload.
 +- Configure Razorpay **test-mode** credentials first in Admin > Payments, with the exact webhook URL/events shown there and in `PAYMENTS_SETUP.md`. Keep the payment encryption key stable. Verify capture, failure/dismissal, pending status/reload, duplicate-event handling, inventory changes and refund reconciliation. Inspect the resulting order/payment records in admin and MongoDB.
 +- If COD is enabled, place a disposable order, verify stored address/items/totals, cancel it, and confirm stock returns once. Review payment worker heartbeat/retries and email delivery status.
 +- Switch to live provider credentials only after tests and account activation; confirm live-mode webhooks separately. Real charges/refunds require your business decision.
@@ -2114,7 +2114,7 @@ index 0000000..ba0315b
 +
 +Docker was unavailable, so the image was not built or started here. The Render/Compose specifications passed schema validation, but actual host deployment and the included GitHub-hosted workflow have not run. Windows commands are cross-platform in design; execution here was on Linux. Multi-instance scaling, endurance/peak traffic and external penetration testing were not performed.
 +
-+Online payment tests use controlled provider responses; real Razorpay capture/refund and webhook delivery, SMTP inbox delivery, Google OAuth, Cloudinary upload, live Atlas connectivity, host DNS/TLS and domain-specific URLs must be accepted on the deployment account. Follow `DEPLOYMENT.md` before opening real orders. No live transaction, provider message or customer database change was made.
++Online payment tests use controlled provider responses; real Razorpay capture/refund and webhook delivery, SMTP inbox delivery, Google OAuth, cloudinary upload, live Atlas connectivity, host DNS/TLS and domain-specific URLs must be accepted on the deployment account. Follow `DEPLOYMENT.md` before opening real orders. No live transaction, provider message or customer database change was made.
 diff --git a/frontend/package-lock.json b/frontend/package-lock.json
 index d7c224e..b923bac 100644
 --- a/frontend/package-lock.json

@@ -71,7 +71,7 @@ Save as **draft** or **archived** to hide the content from visitors. Until a pag
 
 1. Open **Admin → Blogs** (`/admin/blogs`) and click **New blog**.
 2. Enter the title and click **Generate page address from name**, or enter a unique lowercase slug such as `summer-care-guide`.
-3. Add the optional **Short introduction** and article image. You can enter an HTTPS image URL or use the existing **Upload image to Cloudinary** control after configuring Cloudinary in Admin Settings. Uploads accept JPEG, PNG, WebP or GIF up to 5 MB.
+3. Add the optional **Short introduction** and article image. You can enter an HTTPS image URL or use the existing **Upload image to cloudinary** control after configuring cloudinary in Admin Settings. Uploads accept JPEG, PNG, WebP or GIF up to 5 MB.
 4. Write **Content** and preview it. Content is plain text with paragraph breaks; HTML is displayed as text, not executed. An image is optional.
 5. Choose **draft** to save privately, or **published** to show the article immediately. Click **Save changes**.
 6. Open `/blog` or `/blog/your-slug` to check the published article.
@@ -88,7 +88,7 @@ Saved articles use the `blog_posts` collection. The editor sends the last saved 
 4. In your existing MongoDB database, check `pages` for `{ "slug": "about" }` and `blog_posts` for your article slug. Confirm their `status`, `content` and `updatedAt` values.
 5. Change a record back to draft and confirm the public URL no longer exposes its content.
 
-Local automated checks use isolated data and browser API fixtures. They do not connect to your Atlas database or verify a real Cloudinary upload. Your configured database must be reachable for real saves.
+Local automated checks use isolated data and browser API fixtures. They do not connect to your Atlas database or verify a real cloudinary upload. Your configured database must be reachable for real saves.
 
 ## Changed files
 

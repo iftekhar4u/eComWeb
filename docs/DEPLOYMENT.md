@@ -121,7 +121,7 @@ Before accepting real orders, use your own accounts to complete these checks:
 - Create/publish a disposable blog or About edit, reload, restart the service and verify persistence. Check actual images/content and mobile layout.
 - Update saved SEO/email public URLs, logo URLs and canonicals from localhost/test domains. Check sitemap/robots. Database settings can override environment defaults.
 - If Google sign-in is enabled, register `https://YOUR_DOMAIN/api/v1/auth/google/callback` in Google and `GOOGLE_CALLBACK_URL`; test login/account linking.
-- Restore SMTP, Cloudinary and WhatsApp settings as used. Send email to an inbox you control, verify sender-domain authentication with the provider and test an admin image upload.
+- Restore SMTP, cloudinary and WhatsApp settings as used. Send email to an inbox you control, verify sender-domain authentication with the provider and test an admin image upload.
 - Configure Razorpay **test-mode** credentials first in Admin > Payments, with the exact webhook URL/events shown there and in `PAYMENTS_SETUP.md`. Keep the payment encryption key stable. Verify capture, failure/dismissal, pending status/reload, duplicate-event handling, inventory changes and refund reconciliation. Inspect the resulting order/payment records in admin and MongoDB.
 - If COD is enabled, place a disposable order, verify stored address/items/totals, cancel it, and confirm stock returns once. Review payment worker heartbeat/retries and email delivery status.
 - Switch to live provider credentials only after tests and account activation; confirm live-mode webhooks separately. Real charges/refunds require your business decision.

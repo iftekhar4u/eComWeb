@@ -12,16 +12,16 @@ import argon2 from 'argon2'
 import User from '../../models/User.js'
 import { requireCsrf } from '../../middleware/csrfMiddleware.js'
 import { errorHandler } from '../../middleware/errorMiddleware.js'
-import { createIntegrationStore, adminSettings, publicWhatsApp, defaultSettings } from '../../integrations/store.js'
+import { createIntegrationStore, adminSettings, publicWhatsApp, defaultSettings, resolveCloudinary } from '../../integrations/store.js'
 import { resolveDatabaseConfig, validateAtlasUri, testAtlas } from '../../integrations/atlas.js'
-import { testCloudinary, uploadImage, MAX_IMAGE_BYTES } from '../../integrations/cloudinary.js'
+import { testcloudinary, uploadImage, MAX_IMAGE_BYTES } from '../../integrations/cloudinary.js'
 import { integrationRoutes, publicIntegrationRoutes } from '../../integrations/routes.js'
 import { copyDatabase, migrationPlan } from '../../integrations/migrate.js'
 
 const directory = await mkdtemp(path.join(tmpdir(), 'aurelia-integrations-'))
 const key = 'isolated-integration-key-not-a-real-secret-123456'
 const uri = 'mongodb+srv://demo:encoded%40password@cluster0.example.mongodb.net/aurelia?retryWrites=true&w=majority'
-const config = { NODE_ENV: 'test', MFA_ENCRYPTION_KEY: key, MONGO_URI: 'mongodb://127.0.0.1:27017/source' }
+const config = { NODE_ENV: 'test', MFA_ENCRYPTION_KEY: key, MONGO_URI: 'mongodb://127.0.0.1:27017/source', CLOUDINARY_CLOUD_NAME: 'sample-cloud', CLOUDINARY_API_KEY: 'private-api-key', CLOUDINARY_API_SECRET: 'private-api-secret', CLOUDINARY_FOLDER: 'aurelia/products' }
 const makeStore = name => createIntegrationStore({ ...config, INTEGRATIONS_DIRECTORY: path.join(directory, name) })
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/qz8AAAAASUVORK5CYII=', 'base64')
 const cloud = { enabled: true, cloudName: 'sample-cloud', apiKey: 'private-api-key', apiSecret: 'private-api-secret', folder: 'aurelia/products' }
@@ -46,6 +46,17 @@ test('vault encrypts credentials, preserves other sections, persists across inst
   const tampered = JSON.parse(raw); tampered.tag = Buffer.alloc(16).toString('base64')
   await writeFile(path.join(directory, 'vault/integrations.enc'), JSON.stringify(tampered))
   await assert.rejects(store.read(), { status: 503 })
+})
+
+test('Cloudinary environment credentials provide private upload defaults until Admin settings are saved', () => {
+  const environment = { CLOUDINARY_CLOUD_NAME: 'env-cloud', CLOUDINARY_API_KEY: 'env-key', CLOUDINARY_API_SECRET: 'env-secret', CLOUDINARY_FOLDER: 'aurelia/catalog' }
+  const current = defaultSettings()
+  assert.deepEqual(resolveCloudinary(current, environment), { enabled: true, cloudName: 'env-cloud', apiKey: 'env-key', apiSecret: 'env-secret', folder: 'aurelia/catalog' })
+  const safe = adminSettings(current, { ...config, ...environment })
+  assert.deepEqual(safe.cloudinary, { enabled: true, cloudName: 'env-cloud', folder: 'aurelia/catalog', source: 'environment', apiKeySaved: true, apiSecretSaved: true })
+  assert.ok(!JSON.stringify(safe).includes(environment.CLOUDINARY_API_SECRET))
+  current.cloudinary = { ...cloud, enabled: false }
+  assert.deepEqual(resolveCloudinary(current, environment), current.cloudinary)
 })
 
 test('public configuration contains only enabled WhatsApp fields and validates numbers', () => {
@@ -89,7 +100,7 @@ test('Atlas probing closes connections, redacts driver failures, and checks the 
   assert.equal(closed, 4)
 })
 
-test('Cloudinary signs only on the server, validates images, and sanitizes provider failures', async () => {
+test('cloudinary signs only on the server, validates images, and sanitizes provider failures', async () => {
   let calls = 0
   const fetcher = async (url, options) => {
     calls++
@@ -108,8 +119,8 @@ test('Cloudinary signs only on the server, validates images, and sanitizes provi
   await assert.rejects(uploadImage(cloud, { buffer: png, mimetype: 'image/jpeg' }, fetcher), { status: 400 })
   await assert.rejects(uploadImage(cloud, { buffer: Buffer.alloc(MAX_IMAGE_BYTES + 1), mimetype: 'image/png' }, fetcher), { status: 413 })
   assert.equal(calls, 1)
-  await assert.rejects(testCloudinary(cloud, async () => { throw new Error(cloud.apiSecret) }), e => e.status === 502 && !e.message.includes(cloud.apiSecret))
-  await testCloudinary(cloud, async (url, options) => {
+  await assert.rejects(testcloudinary(cloud, async () => { throw new Error(cloud.apiSecret) }), e => e.status === 502 && !e.message.includes(cloud.apiSecret))
+  await testcloudinary(cloud, async (url, options) => {
     assert.equal(url, 'https://api.cloudinary.com/v1_1/sample-cloud/ping')
     assert.equal(options.headers.Authorization, `Basic ${Buffer.from(cloud.apiKey + ':' + cloud.apiSecret).toString('base64')}`)
     return { ok: true, json: async () => ({ status: 'ok' }) }
@@ -122,7 +133,7 @@ const originalFind = User.collection.findOne
 let role = 'admin'
 User.collection.findOne = async () => ({ ...account, role })
 const routeStore = makeStore('routes')
-let cloudChecks = 0, atlasChecks = 0, imageUploads = 0, databaseChecks = 0
+let cloudChecks = 0, atlasChecks = 0, imageUploads = 0, databaseChecks = 0, lastUploadSettings
 const runtimeSummary = { connected: true, atlas: true, host: 'cluster0.example.mongodb.net', database: 'aurelia_dev', productCount: 16, latestProduct: { id: '507f1f77bcf86cd799439011', slug: 'atlas-check-product' } }
 const app = express()
 app.locals.config = config
@@ -130,7 +141,7 @@ app.use(express.json())
 app.use(session({ secret: 'isolated-test-session-secret-for-tests-only', resave: false, saveUninitialized: false }))
 app.post('/test-session', (req, res) => { req.session.userId = String(account._id); req.session.sessionVersion = 0; req.session.mfaVerified = req.body.verified !== false; req.session.csrfToken = 'test-csrf'; res.json({}) })
 app.use('/public', publicIntegrationRoutes(routeStore))
-app.use('/integrations', requireCsrf, integrationRoutes({ store: routeStore, config, databaseStatus: async currentConfig => { databaseChecks++; assert.equal(currentConfig, config); return runtimeSummary }, cloudTest: async () => { cloudChecks++ }, atlasTest: async (_uri, admin) => { atlasChecks++; if (admin) assert.equal(String(admin._id), String(account._id)) }, imageUpload: async (_settings, file) => { imageUploads++; assert.deepEqual(file.buffer, png); return { url: 'https://res.cloudinary.com/sample/image/upload/test.png' } } }))
+app.use('/integrations', requireCsrf, integrationRoutes({ store: routeStore, config, databaseStatus: async currentConfig => { databaseChecks++; assert.equal(currentConfig, config); return runtimeSummary }, cloudTest: async () => { cloudChecks++ }, atlasTest: async (_uri, admin) => { atlasChecks++; if (admin) assert.equal(String(admin._id), String(account._id)) }, imageUpload: async (settings, file) => { imageUploads++; lastUploadSettings = settings; assert.deepEqual(file.buffer, png); return { url: 'https://res.cloudinary.com/sample/image/upload/test.png' } } }))
 app.use(errorHandler)
 const server = app.listen(0, '127.0.0.1')
 await new Promise(resolve => server.once('listening', resolve))
@@ -144,6 +155,12 @@ test('integration endpoints enforce authentication, role, MFA, CSRF, password, a
   assert.equal((await agent.get('/integrations')).status, 403)
   await agent.post('/test-session').send({})
   role = 'customer'; assert.equal((await agent.get('/integrations')).status, 403); role = 'admin'
+  const configured = await agent.get('/integrations')
+  assert.deepEqual(configured.body.cloudinary, { enabled: true, cloudName: 'sample-cloud', folder: 'aurelia/products', source: 'environment', apiKeySaved: true, apiSecretSaved: true })
+  const environmentUpload = await agent.post('/integrations/cloudinary/upload').set('x-csrf-token', 'test-csrf').attach('image', png, 'sample.png')
+  assert.equal(environmentUpload.status, 201)
+  assert.deepEqual(lastUploadSettings, { enabled: true, cloudName: 'sample-cloud', apiKey: 'private-api-key', apiSecret: 'private-api-secret', folder: 'aurelia/products' })
+  assert.equal(imageUploads, 1)
   const form = { revision: 0, ...cloud, currentPassword: password }
   assert.equal((await agent.put('/integrations/cloudinary').send(form)).status, 403)
   assert.equal((await agent.put('/integrations/cloudinary').set('x-csrf-token', 'test-csrf').send({ ...form, currentPassword: 'wrong' })).status, 403)
@@ -195,10 +212,10 @@ test('multipart uploads require admin/CSRF and reject oversized and non-image up
   await agent.post('/test-session').send({})
   const response = await agent.post('/integrations/cloudinary/upload').set('x-csrf-token', 'test-csrf').attach('image', png, { filename: 'sample.png', contentType: 'image/png' })
   assert.equal(response.status, 201, JSON.stringify(response.body))
-  assert.equal(imageUploads, 1)
+  assert.equal(imageUploads, 2)
   assert.equal((await agent.post('/integrations/cloudinary/upload').set('x-csrf-token', 'test-csrf').attach('image', Buffer.from('<svg/>'), { filename: 'bad.svg', contentType: 'image/svg+xml' })).status, 400)
   assert.equal((await agent.post('/integrations/cloudinary/upload').set('x-csrf-token', 'test-csrf').attach('image', Buffer.alloc(MAX_IMAGE_BYTES + 1), { filename: 'large.png', contentType: 'image/png' })).status, 413)
-  assert.equal(imageUploads, 1)
+  assert.equal(imageUploads, 2)
 })
 
 function fakeDb(seed = {}) {
