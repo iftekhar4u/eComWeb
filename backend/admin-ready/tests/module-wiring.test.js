@@ -101,6 +101,11 @@ test('Cloudinary environment configuration accepts a complete set and rejects pa
     CLOUDINARY_API_SECRET: 'env-secret',
     CLOUDINARY_FOLDER: 'aurelia/catalog',
   })
+
+  test('administrator authenticator is disabled by default and can be explicitly re-enabled', () => {
+    assert.equal(getConfig({ NODE_ENV: 'test' }).ADMIN_MFA_ENABLED, false)
+    assert.equal(getConfig({ NODE_ENV: 'test', ADMIN_MFA_ENABLED: 'true' }).ADMIN_MFA_ENABLED, true)
+  })
   assert.equal(parsed.CLOUDINARY_CLOUD_NAME, 'env-cloud')
   assert.equal(parsed.CLOUDINARY_API_KEY, 'env-key')
   assert.equal(parsed.CLOUDINARY_API_SECRET, 'env-secret')

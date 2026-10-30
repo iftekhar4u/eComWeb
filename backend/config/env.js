@@ -9,6 +9,7 @@ const envSchema = z.object({
   MONGO_URI: optionalText(z.string().min(1)),
   INTEGRATIONS_DIRECTORY: optionalText(z.string().min(1)),
   INTEGRATIONS_IGNORE_DATABASE: z.preprocess(value => value === true || value === 'true', z.boolean()).default(false),
+  ADMIN_MFA_ENABLED: z.preprocess(value => value === true || value === 'true', z.boolean()).default(false),
   MONGO_DEV_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/aurelia_dev'),
   MONGO_TEST_URI: z.string().min(1).default('mongodb://127.0.0.1:27017/aurelia_test'),
   SESSION_SECRET: z.string().min(32).optional(),

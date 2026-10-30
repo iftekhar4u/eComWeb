@@ -11,7 +11,7 @@ import {protect,requireAdmin} from '../../middleware/authMiddleware.js'
 
 // An isolated in-memory collection drives real Mongoose queries/validators.
 // No test connects to the user's database or writes to real accounts.
-const config={NODE_ENV:'test',PORT:5000,CLIENT_URL:'http://localhost:5173',TRUST_PROXY:0,SESSION_SECRET:'admin-ready-isolated-test-session-secret',GOOGLE_AUTH_ENABLED:false}
+const config={NODE_ENV:'test',PORT:5000,CLIENT_URL:'http://localhost:5173',TRUST_PROXY:0,SESSION_SECRET:'admin-ready-isolated-test-session-secret',GOOGLE_AUTH_ENABLED:false,ADMIN_MFA_ENABLED:true}
 let records=[],writes=[]
 const value=(record,key)=>key.split('.').reduce((v,k)=>v?.[k],record)
 const same=(a,b)=>String(a)===String(b)
@@ -96,18 +96,20 @@ test('password updates require MFA/current password and revoke all existing sess
  assert.equal((await session.agent.get('/api/auth/session')).status,401)
  assert.equal(session.record.mfa.enabled,true);assert.equal(session.record.role,'admin')
 })
-test('development password-only login opens admin APIs and still protects accounts',async()=>{
- const previous=app.locals.config.NODE_ENV
- app.locals.config.NODE_ENV='development'
+test('disabling MFA allows password-only admin login in production and protects account access',async()=>{
+ const previous=app.locals.config.ADMIN_MFA_ENABLED,previousEnvironment=app.locals.config.NODE_ENV
+ app.locals.config.ADMIN_MFA_ENABLED=false
+ app.locals.config.NODE_ENV='production'
  try {
-  const record=await account();const session=await signIn()
+  const record=await account();record.mfa.enabled=true;record.mfa.secretEncrypted='existing-enrollment';const session=await signIn()
   assert.equal(session.response.body.mfaRequired,false)
   assert.equal((await session.agent.get('/api/auth/session')).body.mfaRequired,false)
+  assert.equal(session.response.body.user.mfaEnabled,true)
   // Exercise the real authorization chain without querying dashboard collections.
   app.get('/__test/admin-access',protect,requireAdmin,(_req,res)=>res.json({allowed:true}))
   const layer=app.router.stack.pop();app.router.stack.splice(app.router.stack.length-2,0,layer)
   assert.equal((await session.agent.get('/__test/admin-access')).status,200)
-  assert.equal(record.mfa.enabled,false)
+  assert.equal((await session.agent.post('/api/admin-ready/security/setup').set('x-csrf-token',session.csrf).send({})).status,503)
   assert.equal(writes.length,0)
   const missingCsrf=await session.agent.post('/api/admin-ready/security/password').send({})
   assert.equal(missingCsrf.status,403)
@@ -117,6 +119,6 @@ test('development password-only login opens admin APIs and still protects accoun
   assert.equal((await customer.agent.get('/api/admin-ready/readiness')).status,403)
   const anon=request.agent(server),csrf=(await anon.get('/api/auth/csrf-token')).body.csrfToken
   assert.equal((await anon.post('/api/auth/login').set('x-csrf-token',csrf).send({email:'customer@aurelia.example',password:'IncorrectPassword!234'})).status,401)
- } finally {app.locals.config.NODE_ENV=previous}
+ } finally {app.locals.config.ADMIN_MFA_ENABLED=previous;app.locals.config.NODE_ENV=previousEnvironment}
 })
 test.after(async()=>{await new Promise(resolve=>server.close(resolve));User.collection.findOne=originalFind;User.collection.updateOne=originalUpdate})

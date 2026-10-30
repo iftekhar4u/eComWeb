@@ -21,7 +21,7 @@ import { copyDatabase, migrationPlan } from '../../integrations/migrate.js'
 const directory = await mkdtemp(path.join(tmpdir(), 'aurelia-integrations-'))
 const key = 'isolated-integration-key-not-a-real-secret-123456'
 const uri = 'mongodb+srv://demo:encoded%40password@cluster0.example.mongodb.net/aurelia?retryWrites=true&w=majority'
-const config = { NODE_ENV: 'test', MFA_ENCRYPTION_KEY: key, MONGO_URI: 'mongodb://127.0.0.1:27017/source', CLOUDINARY_CLOUD_NAME: 'sample-cloud', CLOUDINARY_API_KEY: 'private-api-key', CLOUDINARY_API_SECRET: 'private-api-secret', CLOUDINARY_FOLDER: 'aurelia/products' }
+const config = { NODE_ENV: 'test', MFA_ENCRYPTION_KEY: key, MONGO_URI: 'mongodb://127.0.0.1:27017/source', CLOUDINARY_CLOUD_NAME: 'sample-cloud', CLOUDINARY_API_KEY: 'private-api-key', CLOUDINARY_API_SECRET: 'private-api-secret', CLOUDINARY_FOLDER: 'aurelia/products', ADMIN_MFA_ENABLED: true }
 const makeStore = name => createIntegrationStore({ ...config, INTEGRATIONS_DIRECTORY: path.join(directory, name) })
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/qz8AAAAASUVORK5CYII=', 'base64')
 const cloud = { enabled: true, cloudName: 'sample-cloud', apiKey: 'private-api-key', apiSecret: 'private-api-secret', folder: 'aurelia/products' }

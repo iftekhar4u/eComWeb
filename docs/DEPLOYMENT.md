@@ -76,6 +76,7 @@ The Blueprint sets `NODE_VERSION=24`, `NODE_ENV=production`, `TRUST_PROXY=1`, an
 | `MONGO_URI` | Yes | Yes | Intended MongoDB Atlas connection string and database. |
 | `SESSION_SECRET` | Yes | Yes | Stable session signing key; replacing it invalidates sessions. |
 | `MFA_ENCRYPTION_KEY` | Yes | Yes | Stable MFA and encrypted integration-vault key; replacing it can make saved settings unreadable. |
+| `ADMIN_MFA_ENABLED` | No | No | Defaults to `false` for temporary email/password-only admin login. Set `true` to restore authenticator enrollment and verification. |
 | `PAYMENT_PUBLIC_ORIGIN` | When online payments are enabled | No | Public HTTPS origin used to verify payment webhook URLs. |
 | `PAYMENT_ENCRYPTION_KEY` | Before saving payment credentials | Yes | Stable key used for stored payment credentials. |
 

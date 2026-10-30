@@ -41,7 +41,11 @@ async function complete(req, res, user) {
 const router = Router()
 router.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, message: { message: 'Too many verification attempts. Try again in 15 minutes.' } }))
 router.use(protectPendingAdmin)
-router.post('/setup', async (req, res) => {
+function requireMfaEnabled(req, res, next) {
+  if (req.app.locals.config?.ADMIN_MFA_ENABLED !== true) return res.status(503).json({ message: 'Administrator authenticator is currently disabled.' })
+  next()
+}
+router.post('/setup', requireMfaEnabled, async (req, res) => {
   if (req.user.mfa?.enabled) return res.status(409).json({ message: 'Authenticator already enrolled. Enter a code or use a recovery code.' })
   let pending = req.session.adminReadyEnrollment
   if (!pending || pending.expiresAt < Date.now()) {
@@ -56,7 +60,7 @@ router.post('/setup', async (req, res) => {
   const secret = decrypt(pending.secretEncrypted)
   res.set('Cache-Control', 'no-store').json({ secret, recoveryCodes: pending.recoveryCodes, otpauthUrl: generateURI({ issuer: 'AURELIA', label: req.user.email, secret }) })
 })
-router.post('/verify', async (req, res) => {
+router.post('/verify', requireMfaEnabled, async (req, res) => {
   const { code } = z.object({ code: z.string().trim().regex(/^\d{6}$/, 'Enter the six-digit code from your authenticator.') }).strict().parse(req.body)
   if (!req.user.mfa?.secretEncrypted) return res.status(409).json({ message: 'Set up your authenticator first.' })
   if (!req.user.mfa.enabled && (!req.session.adminReadyEnrollment || req.session.adminReadyEnrollment.expiresAt < Date.now())) return res.status(409).json({ message: 'Setup expired. Start authenticator setup again.' })
@@ -67,7 +71,7 @@ router.post('/verify', async (req, res) => {
   req.user.mfa.enabled = true
   await complete(req, res, req.user)
 })
-router.post('/recover', async (req, res) => {
+router.post('/recover', requireMfaEnabled, async (req, res) => {
   const { code } = z.object({ code: z.string().trim().toLowerCase().regex(/^[a-f0-9]{12}$/, 'Enter a saved 12-character recovery code.') }).strict().parse(req.body)
   if (!req.user.mfa?.enabled) return res.status(409).json({ message: 'Complete authenticator enrollment first.' })
   for (const hash of req.user.mfa.recoveryCodeHashes || []) {

@@ -1,8 +1,8 @@
 import User from '../models/User.js'
 
-// Local development uses password-only admin login. Other environments retain MFA.
+// The temporary default is password-only admin sign-in; MFA can be re-enabled by configuration.
 export function adminMfaRequired(req) {
-	return req.app?.locals?.config?.NODE_ENV !== 'development'
+	return req.app?.locals?.config?.ADMIN_MFA_ENABLED === true
 }
 
 export async function protect(req, res, next) {
