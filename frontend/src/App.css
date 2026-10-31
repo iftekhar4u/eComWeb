@@ -698,16 +698,64 @@ h3 {
 }
 
 .add-button {
-    background: transparent;
-    border: 0;
-    border-bottom: 1px solid var(--ink);
-    padding: 0 0 8px;
+    background: var(--ink);
+    border: 1px solid var(--ink);
+    color: #fff;
+    padding: 11px 14px;
     font-size: 10px;
     letter-spacing: .13em;
     text-transform: uppercase;
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
     gap: 15px;
-    cursor: pointer
+    cursor: pointer;
+    transition: background-color .2s ease, border-color .2s ease
+}
+
+.add-button:hover:not(:disabled),
+.purchase-button:hover:not(:disabled) {
+    background: var(--accent);
+    border-color: var(--accent)
+}
+
+.add-button:focus-visible,
+.purchase-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px
+}
+
+.store-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: max-content;
+    max-width: min(390px, calc(100vw - 32px));
+    padding: 14px 18px;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 8px 28px #29242124;
+    font-size: 13px;
+    animation: store-toast-in .2s ease-out
+}
+
+.store-toast svg {
+    flex: 0 0 auto;
+    color: var(--accent)
+}
+
+@keyframes store-toast-in {
+    from { opacity: 0; transform: translateY(-8px) }
+    to { opacity: 1; transform: translateY(0) }
+}
+
+@media(prefers-reduced-motion: reduce) {
+    .store-toast { animation: none }
 }
 
 .ritual-banner {

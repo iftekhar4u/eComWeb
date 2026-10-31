@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   FiHeart,
@@ -8,6 +8,7 @@ import {
   FiUser,
   FiHome,
   FiGrid,
+  FiCheckCircle,
 } from "react-icons/fi";
 import Offcanvas from "react-bootstrap/Offcanvas";
 import { useCart } from "../context/CartContext";
@@ -23,10 +24,24 @@ export default function Layout({ children }) {
   const [newsletterMessage, setNewsletterMessage] = useState("");
   const [newsletterBusy, setNewsletterBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
   const { cartCount } = useCart();
   const { wishlistCount } = useWishlist();
   const { user } = useAuth();
   const links = categoryOrder.map((slug) => ({ label: categoryDetails[slug].label, slug }));
+  useEffect(() => {
+    const showToast = event => {
+      setToast(event.detail.message);
+      clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2600);
+    };
+    window.addEventListener('aurelia:toast', showToast);
+    return () => {
+      window.removeEventListener('aurelia:toast', showToast);
+      clearTimeout(toastTimer.current);
+    };
+  }, []);
   return (
     <>
       <div className="offer-bar">
@@ -80,6 +95,7 @@ export default function Layout({ children }) {
           </div>
         </div>
       </header>
+      {toast && <div className="store-toast" role="status" aria-live="polite"><FiCheckCircle aria-hidden="true" /><span>{toast}</span></div>}
       <Offcanvas aria-labelledby="mobile-menu-title" show={open} onHide={() => setOpen(false)} placement="start" className="mobile-drawer">
           <Offcanvas.Header closeButton><Offcanvas.Title id="mobile-menu-title">AURELIA</Offcanvas.Title></Offcanvas.Header>
           <Offcanvas.Body><form onSubmit={e => { e.preventDefault(); navigate(`/shop?search=${encodeURIComponent(query)}`); setOpen(false); }}><input aria-label="Search products on mobile" placeholder="Search essentials" value={query} onChange={e => setQuery(e.target.value)} /><button type="submit">Search</button></form><Link to="/" onClick={() => setOpen(false)}>Home</Link>{links.map((link) => <Link to={`/category/${link.slug}`} onClick={() => setOpen(false)} key={link.slug}>{link.label}</Link>)}<Link to="/collections" onClick={() => setOpen(false)}>Collections</Link><Link to="/shop" onClick={() => setOpen(false)}>Offers</Link><Link to="/blog" onClick={() => setOpen(false)}>Blog</Link><Link to="/pages/about" onClick={() => setOpen(false)}>About</Link></Offcanvas.Body>
