@@ -69,9 +69,7 @@ export function Login() {
         <button className="button button-dark auth-submit" disabled={loading}>
           {loading ? "Signing in..." : "Sign in"}
         </button>
-        <div className="auth-divider"><span>or</span></div>
-        <button className="google-button" type="button" onClick={startGoogleLogin} disabled={!googleEnabled}><FcGoogle /> Continue with Google</button>
-        {!googleEnabled && <p className="form-note">Google sign-in is not configured for this environment.</p>}
+        {googleEnabled && <><div className="auth-divider"><span>or</span></div><button className="google-button" type="button" onClick={startGoogleLogin}><FcGoogle /> Continue with Google</button></>}
         <p className="auth-switch">
           New to Aurelia? <Link to="/signup">Create an account</Link>
         </p>
@@ -158,9 +156,7 @@ export function Signup() {
         <button className="button button-dark auth-submit" disabled={loading}>
           {loading ? "Creating..." : "Create account"}
         </button>
-        <div className="auth-divider"><span>or</span></div>
-        <button className="google-button" type="button" onClick={startGoogleLogin} disabled={!googleEnabled}><FcGoogle /> Continue with Google</button>
-        {!googleEnabled && <p className="form-note">Google sign-in is not configured for this environment.</p>}
+        {googleEnabled && <><div className="auth-divider"><span>or</span></div><button className="google-button" type="button" onClick={startGoogleLogin}><FcGoogle /> Continue with Google</button></>}
         <p className="auth-switch">
           Already have an account? <Link to="/login">Sign in</Link>
         </p>
